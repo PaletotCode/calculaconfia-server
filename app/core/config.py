@@ -4,10 +4,10 @@ from typing import Optional
 
 class Settings(BaseSettings):
     # Database
-    DATABASE_URL: str
+    DATABASE_URL: str = "postgresql+asyncpg://torres_user:torres_password@localhost:5432/torres_db"
     
     # Security
-    SECRET_KEY: str
+    SECRET_KEY: str = "change-this-super-secret-key-in-production-please"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
@@ -23,10 +23,10 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"
     
-    # Email Configuration
-    MAIL_USERNAME: str
-    MAIL_PASSWORD: str
-    MAIL_FROM: str
+    # Email Configuration (VALORES PADRÃO PARA DESENVOLVIMENTO)
+    MAIL_USERNAME: str = "noreply@torresproject.local"
+    MAIL_PASSWORD: str = "dummy-password-change-in-production"
+    MAIL_FROM: str = "noreply@torresproject.local"
     MAIL_PORT: int = 587
     MAIL_SERVER: str = "smtp.gmail.com"
     MAIL_FROM_NAME: str = "Torres Project"

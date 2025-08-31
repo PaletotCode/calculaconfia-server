@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 import time
 import uuid
 
-from api.endpoints import router
+from app.api.endpoints import router
 from core.database import init_cache, close_cache, engine, Base
 from core.logging_config import configure_logging, get_logger, LogContext
 from core.config import settings
