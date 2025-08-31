@@ -1,0 +1,37 @@
+# Arquivos de configuração locais
+*.env
+.env.*
+
+# Arquivos de log
+*.log
+
+# Banco de dados SQLite
+*.sqlite3
+*.db
+
+# Arquivos temporários
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# Compilações
+*.egg-info/
+dist/
+build/
+
+# Cache de ferramentas
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+.coverage
+htmlcov/
+.cache/
+pytest_cache/
+.tox/
+
+# IDEs
+.vscode/
+.idea/
+*.iml
