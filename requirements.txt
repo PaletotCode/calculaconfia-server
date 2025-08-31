@@ -6,8 +6,7 @@ pydantic==2.5.0
 pydantic-settings==2.1.0
 
 # CORREÇÃO: Usar PyJWT ao invés de python-jose
-PyJWT==2.8.0
-cryptography==41.0.7
+python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 
 python-multipart==0.0.6
@@ -20,8 +19,7 @@ python-json-logger==2.0.7
 # Cache Redis
 redis==4.6.0
 aioredis==2.0.1
-# CORREÇÃO: Usar fastapi-cache ao invés de fastapi-cache2
-fastapi-cache==0.1.0
+fastapi-cache2[redis]==0.2.1
 
 # Background tasks
 celery==5.3.4

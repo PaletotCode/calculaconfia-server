@@ -32,9 +32,9 @@ async def lifespan(app: FastAPI):
         logger.info("Redis cache initialized successfully")
         
         # Criar tabelas do banco de dados
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database tables created successfully")
+        #async with engine.begin() as conn:
+            #await conn.run_sync(Base.metadata.create_all)
+        #logger.info("Database tables created successfully")
         
         logger.info("Application startup completed")
         yield

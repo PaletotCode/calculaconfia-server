@@ -1,4 +1,4 @@
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
 from typing import Optional
 
 
@@ -24,9 +24,9 @@ class Settings(BaseSettings):
     LOG_FORMAT: str = "json"
     
     # Email Configuration (VALORES PADRÃO PARA DESENVOLVIMENTO)
-    MAIL_USERNAME: str = "noreply@torresproject.local"
+    MAIL_USERNAME: str = "paletot.business@gmail.com"
     MAIL_PASSWORD: str = "dummy-password-change-in-production"
-    MAIL_FROM: str = "noreply@torresproject.local"
+    MAIL_FROM: str = "paletot.business@gmail.com"
     MAIL_PORT: int = 587
     MAIL_SERVER: str = "smtp.gmail.com"
     MAIL_FROM_NAME: str = "Torres Project"
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
 
     class Config:
-        env_file = ".env"
+        pass
 
 
 settings = Settings()
