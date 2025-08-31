@@ -3,6 +3,7 @@ from sqlalchemy.orm import declarative_base
 import redis.asyncio as redis
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend
+from typing import AsyncGenerator
 
 from .config import settings
 
@@ -32,7 +33,7 @@ SessionLocal = async_sessionmaker(
 )
 
 
-async def get_db() -> AsyncSession:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with SessionLocal() as session:
         try:
             yield session

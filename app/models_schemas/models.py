@@ -4,8 +4,8 @@ from typing import Dict, Any, List
 import json
 from datetime import datetime
 
-from .config import settings
-from .logging_config import get_logger
+from ..config import settings
+from ..logging_config import get_logger
 
 # Configuração do Celery
 celery_app = Celery(
