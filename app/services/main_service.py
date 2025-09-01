@@ -265,7 +265,7 @@ class CalculationService:
                             )
                     
                     # Transação atômica para operação crítica
-                    async with db.begin():
+                    async with db.begin_nested():
                         # Refresh user para dados mais recentes
                         await db.refresh(user)
                         
@@ -317,6 +317,7 @@ class CalculationService:
                         )
                         
                         db.add(credit_transaction)
+                        await db.commit()
                         
                         # Commit automático com async with db.begin()
                     
