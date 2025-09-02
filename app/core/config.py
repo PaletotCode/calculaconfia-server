@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     MAIL_STARTTLS: bool = True
     MAIL_SSL_TLS: bool = False
     USE_CREDENTIALS: bool = True
+    # Adicione esta linha, pode ser perto das outras configurações de MAIL
+    SENDGRID_API_KEY: Optional[str] = None
     
     # Application
     APP_NAME: str = "Torres Project API"
