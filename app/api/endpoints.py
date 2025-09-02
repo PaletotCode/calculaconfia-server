@@ -11,7 +11,7 @@ from ..core.security import create_access_token, get_current_active_user
 from ..core.config import settings
 from ..core.background_tasks import send_calculation_email, send_welcome_email
 from ..core.logging_config import get_logger, LogContext
-from ..models_schemas.models import User, PlanType
+from ..models_schemas.models import User
 from ..models_schemas.schemas import (
     UserCreate,
     UserResponse,
@@ -19,16 +19,19 @@ from ..models_schemas.schemas import (
     CalculationRequest,
     CalculationResponse,
     QueryHistoryResponse,
-    UserPlanResponse,
-    UserPlanCreate,
     AuditLogResponse,
     CreditTransactionResponse,
-    DashboardStats
+    DashboardStats,
+    SendVerificationCodeRequest,
+    VerifyAccountRequest,
+    RequestPasswordResetRequest,
+    ResetPasswordRequest,
+    VerificationCodeResponse,
+    ReferralStatsResponse
 )
 from ..services.main_service import (
     UserService,
     CalculationService,
-    PlanService,
     AnalyticsService
 )
 
@@ -44,28 +47,32 @@ async def register(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Registra um novo usuário no sistema com plano gratuito
+    Registra um novo usuário (inativo até verificação por SMS)
     """
-    with LogContext(endpoint="register", email=user_data.email):
+    with LogContext(endpoint="register", phone_number=user_data.phone_number):
         logger.info("User registration request received")
         
         user = await UserService.register_new_user(db, user_data, request)
         
-        # Enviar email de boas-vindas em background
-        background_tasks.add_task(
-            send_welcome_email.delay,
-            user.email,
-            user.email.split('@')[0]  # Nome baseado no email
-        )
+        # Enviar email de boas-vindas apenas se email fornecido
+        if user.email:
+            background_tasks.add_task(
+                send_welcome_email.delay,
+                user.email,
+                user.first_name or user.phone_number
+            )
         
         return UserResponse(
             id=user.id,
             email=user.email,
+            phone_number=user.phone_number,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            referral_code=user.referral_code,
             credits=user.credits,
             is_verified=user.is_verified,
             is_active=user.is_active,
-            created_at=user.created_at,
-            plan_type=PlanType.FREE  # Padrão para novos usuários
+            created_at=user.created_at
         )
 
 
@@ -76,34 +83,33 @@ async def login(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Autentica o usuário e retorna um token de acesso JWT
+    Autentica o usuário com telefone ou email e retorna um token JWT
     """
-    with LogContext(endpoint="login", email=form_data.username):
+    with LogContext(endpoint="login", identifier=form_data.username):
         logger.info("User login request received")
         
         user = await UserService.authenticate_user(
             db, form_data.username, form_data.password, request
         )
         
-        # Buscar informações do plano
-        user_plan = await PlanService.get_user_plan(db, user.id)
-        
         # Criar token
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
-            data={"sub": user.email},
+            data={"sub": user.phone_number or user.email},
             expires_delta=access_token_expires
         )
         
         user_info = UserResponse(
             id=user.id,
             email=user.email,
+            phone_number=user.phone_number,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            referral_code=user.referral_code,
             credits=user.credits,
             is_verified=user.is_verified,
             is_active=user.is_active,
-            created_at=user.created_at,
-            plan_type=user_plan.plan_type if user_plan else PlanType.FREE,
-            plan_expires_at=user_plan.expires_at if user_plan else None
+            created_at=user.created_at
         )
         
         return Token(
@@ -114,6 +120,78 @@ async def login(
         )
 
 
+# ===== NOVOS ENDPOINTS DE VERIFICAÇÃO E SENHA =====
+
+@router.post("/auth/send-verification-code", response_model=VerificationCodeResponse)
+async def send_verification_code(
+    request_data: SendVerificationCodeRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Envia código de verificação por SMS ou email
+    """
+    with LogContext(endpoint="send_verification_code", identifier=request_data.identifier):
+        logger.info("Verification code request received")
+        
+        response = await UserService.send_verification_code(db, request_data, request)
+        
+        return response
+
+
+@router.post("/auth/verify-account", response_model=UserResponse)
+async def verify_account(
+    request_data: VerifyAccountRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Verifica conta do usuário com código SMS/Email
+    """
+    with LogContext(endpoint="verify_account", identifier=request_data.identifier):
+        logger.info("Account verification request received")
+        
+        user_response = await UserService.verify_account(db, request_data, request)
+        
+        return user_response
+
+
+@router.post("/auth/request-password-reset", response_model=VerificationCodeResponse)
+async def request_password_reset(
+    request_data: RequestPasswordResetRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Solicita reset de senha por email
+    """
+    with LogContext(endpoint="request_password_reset", email=request_data.email):
+        logger.info("Password reset request received")
+        
+        response = await UserService.request_password_reset(db, request_data, request)
+        
+        return response
+
+
+@router.post("/auth/reset-password")
+async def reset_password(
+    request_data: ResetPasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Reseta senha do usuário com código de verificação
+    """
+    with LogContext(endpoint="reset_password", email=request_data.email):
+        logger.info("Password reset request received")
+        
+        result = await UserService.reset_password(db, request_data, request)
+        
+        return result
+
+
+# ===== ENDPOINTS EXISTENTES ATUALIZADOS =====
+
 @router.post("/calcular", response_model=CalculationResponse)
 async def calcular(
     calculation_data: CalculationRequest,
@@ -123,10 +201,8 @@ async def calcular(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Executa cálculo de ICMS para o usuário autenticado
-    Requer pelo menos 1 crédito disponível
+    Executa cálculo de ICMS com nova lógica de créditos válidos
     """
-
     avg_icms = sum(b.icms_value for b in calculation_data.bills) / len(calculation_data.bills)
     with LogContext(
         endpoint="calcular",
@@ -140,19 +216,20 @@ async def calcular(
             db, current_user, calculation_data, request
         )
         
-        # Enviar email com resultado em background
-        email_data = {
-            "average_icms": avg_icms,
-            "bill_count": len(calculation_data.bills),
-            "valor_calculado": result.valor_calculado,
-            "creditos_restantes": result.creditos_restantes
-        }
-        
-        background_tasks.add_task(
-            send_calculation_email.delay,
-            current_user.email,
-            email_data
-        )
+        # Enviar email com resultado se email disponível
+        if current_user.email:
+            email_data = {
+                "average_icms": avg_icms,
+                "bill_count": len(calculation_data.bills),
+                "valor_calculado": result.valor_calculado,
+                "creditos_restantes": result.creditos_restantes
+            }
+            
+            background_tasks.add_task(
+                send_calculation_email.delay,
+                current_user.email,
+                email_data
+            )
         
         logger.info("Calculation completed successfully",
                    calculation_id=result.calculation_id,
@@ -211,84 +288,129 @@ async def get_current_user_info(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Retorna informações do usuário atual incluindo plano
+    Retorna informações do usuário atual com créditos válidos
     """
-    user_plan = await PlanService.get_user_plan(db, current_user.id)
+    # Atualizar créditos válidos em tempo real
+    valid_credits = await CalculationService._get_valid_credits_balance(db, current_user.id)
     
     return UserResponse(
         id=current_user.id,
         email=current_user.email,
-        credits=current_user.credits,
+        phone_number=current_user.phone_number,
+        first_name=current_user.first_name,
+        last_name=current_user.last_name,
+        referral_code=current_user.referral_code,
+        credits=valid_credits,  # Mostrar créditos válidos
         is_verified=current_user.is_verified,
         is_active=current_user.is_active,
-        created_at=current_user.created_at,
-        plan_type=user_plan.plan_type if user_plan else PlanType.FREE,
-        plan_expires_at=user_plan.expires_at if user_plan else None
+        created_at=current_user.created_at
     )
 
 
-# ===== ENDPOINTS DE PLANOS =====
+# ===== NOVOS ENDPOINTS DE REFERÊNCIA =====
 
-@router.get("/planos/me", response_model=UserPlanResponse)
-async def get_my_plan(
+@router.get("/referral/stats", response_model=ReferralStatsResponse)
+async def get_referral_stats(
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Retorna o plano atual do usuário
+    Retorna estatísticas de referência do usuário
     """
-    user_plan = await PlanService.get_user_plan(db, current_user.id)
+    from sqlalchemy import select, func
     
-    if not user_plan:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User plan not found"
+    with LogContext(endpoint="referral_stats", user_id=current_user.id):
+        logger.info("Referral stats request received")
+        
+        # Contar total de referenciados
+        stmt = select(func.count(User.id)).where(User.referred_by_id == current_user.id)
+        result = await db.execute(stmt)
+        total_referrals = result.scalar() or 0
+        
+        referral_credits_remaining = max(0, 3 - current_user.referral_credits_earned)
+        
+        return ReferralStatsResponse(
+            referral_code=current_user.referral_code,
+            total_referrals=total_referrals,
+            referral_credits_earned=current_user.referral_credits_earned,
+            referral_credits_remaining=referral_credits_remaining
         )
-    
-    return UserPlanResponse(
-        id=user_plan.id,
-        plan_type=user_plan.plan_type,
-        credits_per_month=user_plan.credits_per_month,
-        max_calculations_per_day=user_plan.max_calculations_per_day,
-        expires_at=user_plan.expires_at,
-        is_active=user_plan.is_active,
-        created_at=user_plan.created_at
-    )
 
 
-@router.put("/planos/upgrade", response_model=UserPlanResponse)
-async def upgrade_plan(
-    plan_data: UserPlanCreate,
-    request: Request,
+# ===== ENDPOINTS DE CRÉDITOS =====
+
+@router.get("/credits/history", response_model=List[CreditTransactionResponse])
+async def get_credit_history(
+    limit: int = 50,
+    offset: int = 0,
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Atualiza o plano do usuário (upgrade/downgrade)
+    Retorna histórico de transações de créditos do usuário
     """
+    from sqlalchemy import select, desc
+    from ..models_schemas.models import CreditTransaction
+    
     with LogContext(
-        endpoint="upgrade_plan",
+        endpoint="credit_history",
         user_id=current_user.id,
-        new_plan_type=plan_data.plan_type.value
+        limit=limit,
+        offset=offset
     ):
-        logger.info("Plan upgrade request received")
+        logger.info("Credit history request received")
         
-        updated_plan = await PlanService.update_user_plan(
-            db, current_user.id, plan_data, request
-        )
+        if limit > 200:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Limit cannot exceed 200"
+            )
         
-        return UserPlanResponse(
-            id=updated_plan.id,
-            plan_type=updated_plan.plan_type,
-            credits_per_month=updated_plan.credits_per_month,
-            max_calculations_per_day=updated_plan.max_calculations_per_day,
-            expires_at=updated_plan.expires_at,
-            is_active=updated_plan.is_active,
-            created_at=updated_plan.created_at
-        )
+        stmt = select(CreditTransaction).where(
+            CreditTransaction.user_id == current_user.id
+        ).order_by(
+            desc(CreditTransaction.created_at)
+        ).limit(limit).offset(offset)
+        
+        result = await db.execute(stmt)
+        transactions = result.scalars().all()
+        
+        return [
+            CreditTransactionResponse(
+                id=transaction.id,
+                transaction_type=transaction.transaction_type,
+                amount=transaction.amount,
+                balance_after=transaction.balance_after,
+                description=transaction.description,
+                expires_at=transaction.expires_at,
+                created_at=transaction.created_at
+            )
+            for transaction in transactions
+        ]
 
 
-# ===== ENDPOINTS ADMINISTRATIVOS =====
+@router.get("/credits/balance")
+async def get_valid_credits_balance(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retorna saldo atual de créditos válidos (não expirados)
+    """
+    with LogContext(endpoint="credits_balance", user_id=current_user.id):
+        logger.info("Valid credits balance request received")
+        
+        valid_balance = await CalculationService._get_valid_credits_balance(db, current_user.id)
+        
+        return {
+            "user_id": current_user.id,
+            "valid_credits": valid_balance,
+            "legacy_credits": current_user.credits,  # Campo legado para comparação
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+
+# ===== ENDPOINTS ADMINISTRATIVOS ATUALIZADOS =====
 
 @router.get("/admin/dashboard", response_model=DashboardStats)
 async def admin_dashboard(
@@ -384,3 +506,110 @@ async def detailed_health_check(db: AsyncSession = Depends(get_db)):
         "cache": "connected",  # TODO: Verificar Redis
         "background_tasks": "connected"  # TODO: Verificar Celery
     }
+
+
+# ===== ENDPOINTS DE DESENVOLVIMENTO/DEBUG =====
+
+@router.get("/dev/verification-codes")
+async def list_verification_codes(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Endpoint de desenvolvimento para listar códigos de verificação
+    TODO: Remover em produção
+    """
+    if settings.ENVIRONMENT != "development":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Endpoint not available in this environment"
+        )
+    
+    from sqlalchemy import select, desc
+    from datetime import datetime
+    
+    stmt = select(VerificationCode).where(
+        and_(
+            or_(
+                VerificationCode.identifier == current_user.phone_number,
+                VerificationCode.identifier == current_user.email
+            ),
+            VerificationCode.expires_at > datetime.utcnow()
+        )
+    ).order_by(desc(VerificationCode.created_at)).limit(10)
+    
+    result = await db.execute(stmt)
+    codes = result.scalars().all()
+    
+    return [
+        {
+            "id": code.id,
+            "identifier": code.identifier,
+            "code": code.code,
+            "type": code.type.value,
+            "expires_at": code.expires_at,
+            "used": code.used,
+            "created_at": code.created_at
+        }
+        for code in codes
+    ]
+
+
+@router.post("/dev/simulate-referral-payment")
+async def simulate_referral_payment(
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Endpoint de desenvolvimento para simular pagamento e testar sistema de referência
+    TODO: Remover em produção
+    """
+    if settings.ENVIRONMENT != "development":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Endpoint not available in this environment"
+        )
+    
+    from datetime import datetime, timedelta
+    
+    try:
+        # Simular "pagamento" dando 3 créditos ao usuário
+        old_credits = current_user.credits
+        current_user.credits += 3
+        
+        # Registrar transação de "compra"
+        expires_at = datetime.utcnow() + timedelta(days=30)
+        purchase_transaction = CreditTransaction(
+            user_id=current_user.id,
+            transaction_type="purchase",
+            amount=3,
+            balance_before=old_credits,
+            balance_after=current_user.credits,
+            description="Simulated credit purchase",
+            reference_id=f"sim_purchase_{current_user.id}_{int(datetime.utcnow().timestamp())}",
+            expires_at=expires_at
+        )
+        db.add(purchase_transaction)
+        
+        # Processar bônus de referência
+        await CalculationService._process_referral_bonus(db, current_user)
+        
+        await db.commit()
+        
+        return {
+            "message": "Referral payment simulated successfully",
+            "user_id": current_user.id,
+            "credits_added": 3,
+            "new_balance": current_user.credits
+        }
+        
+    except Exception as e:
+        await db.rollback()
+        logger.error("Error simulating referral payment", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error simulating payment"
+        )
+
+
+# REMOVIDOS: Todos os endpoints relacionados a planos (/planos/me, /planos/upgrade) conforme solicitado

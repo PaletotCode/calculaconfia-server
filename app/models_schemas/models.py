@@ -23,36 +23,46 @@ class AuditAction(enum.Enum):
     PLAN_CHANGE = "plan_change"
     REGISTER = "register"
     PASSWORD_CHANGE = "password_change"
+    VERIFICATION = "verification"
+    PASSWORD_RESET = "password_reset"
+
+class VerificationType(enum.Enum):
+    SMS = "sms"
+    EMAIL = "email"
 
 
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=True)  # Agora opcional
+    phone_number = Column(String, unique=True, index=True, nullable=True)  # Novo campo
     hashed_password = Column(String, nullable=False)
+    first_name = Column(String, nullable=True)  # Novo campo
+    last_name = Column(String, nullable=True)   # Novo campo
+    referral_code = Column(String, unique=True, index=True, nullable=True)  # Novo campo
+    referred_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # Novo campo
+    referral_credits_earned = Column(Integer, default=0, nullable=False)  # Novo campo
     credits = Column(Integer, nullable=False, default=0)
     is_verified = Column(Boolean, default=False, nullable=False)
-    is_active = Column(Boolean, default=True, nullable=False)
+    is_active = Column(Boolean, default=False, nullable=False)  # Agora False por padrão
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
+    # Relacionamentos
     history = relationship("QueryHistory", back_populates="user")
-    plan = relationship("UserPlan", back_populates="user", uselist=False)
+    referrer = relationship("User", remote_side=[id], backref="referred_users")
+    credit_transactions = relationship("CreditTransaction", back_populates="user")
 
 
-class UserPlan(Base):
-    __tablename__ = "user_plans"
+class VerificationCode(Base):
+    __tablename__ = "verification_codes"
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True, index=True)
-    plan_type = Column(Enum(PlanType), nullable=False, default=PlanType.FREE)
-    credits_per_month = Column(Integer, nullable=False, default=3)
-    max_calculations_per_day = Column(Integer, nullable=False, default=10)
-    expires_at = Column(DateTime, nullable=True)
-    is_active = Column(Boolean, default=True, nullable=False)
+    identifier = Column(String, index=True, nullable=False)  # Email ou telefone
+    code = Column(String(6), nullable=False)  # Código de 6 dígitos
+    expires_at = Column(DateTime, nullable=False)
+    type = Column(Enum(VerificationType), nullable=False)
+    used = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
-
-    user = relationship("User", back_populates="plan")
 
 
 class QueryHistory(Base):
@@ -91,13 +101,17 @@ class CreditTransaction(Base):
     __tablename__ = "credit_transactions"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    transaction_type = Column(String(20), nullable=False, index=True)
+    transaction_type = Column(String(20), nullable=False, index=True)  # usage, purchase, bonus, referral_bonus
     amount = Column(Integer, nullable=False)
     balance_before = Column(Integer, nullable=False)
     balance_after = Column(Integer, nullable=False)
     description = Column(String(255), nullable=True)
     reference_id = Column(String(100), nullable=True)
+    expires_at = Column(DateTime, nullable=True)  # Novo campo para validade
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    user = relationship("User", back_populates="credit_transactions")
+
 
 class SelicRate(Base):
     __tablename__ = "selic_rates"
@@ -110,3 +124,6 @@ class SelicRate(Base):
     __table_args__ = (
         sa.UniqueConstraint('year', 'month', name='_year_month_uc'),
     )
+
+
+# REMOVIDO: Modelo UserPlan foi completamente removido conforme solicitado
