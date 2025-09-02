@@ -1,7 +1,7 @@
 from celery import Celery
-from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 from typing import Dict, Any, List
-import json
 from datetime import datetime
 
 from .config import settings
@@ -29,129 +29,48 @@ celery_app.conf.update(
 
 logger = get_logger(__name__)
 
-# Configuração de email
-email_conf = ConnectionConfig(
-    MAIL_USERNAME=settings.MAIL_USERNAME,
-    MAIL_PASSWORD=settings.MAIL_PASSWORD,
-    MAIL_FROM=settings.MAIL_FROM,
-    MAIL_PORT=settings.MAIL_PORT,
-    MAIL_SERVER=settings.MAIL_SERVER,
-    MAIL_FROM_NAME=settings.MAIL_FROM_NAME,
-    MAIL_STARTTLS=settings.MAIL_STARTTLS,
-    MAIL_SSL_TLS=settings.MAIL_SSL_TLS,
-    USE_CREDENTIALS=settings.USE_CREDENTIALS,
-    TEMPLATE_FOLDER='app/templates'
-)
-
-fastmail = FastMail(email_conf)
-
-
+# --- TAREFA GENÉRICA DE ENVIO DE EMAIL COM SENDGRID ---
 @celery_app.task(bind=True, max_retries=3)
-def send_calculation_email(self, user_email: str, calculation_data: Dict[str, Any]):
+def send_email_task(self, to_email: str, subject: str, html_content: str):
     """
-    Envia email com resultado do cálculo para o usuário
+    Tarefa Celery para enviar e-mails de forma assíncrona usando SendGrid.
     """
+    if not settings.SENDGRID_API_KEY:
+        logger.warning("SENDGRID_API_KEY não configurada. Simulando envio de email.")
+        print(f"📧 EMAIL SIMULADO para {to_email} | Assunto: {subject}")
+        return {"status": "simulated", "to": to_email}
+
     try:
-        logger.info("Sending calculation email", 
-                   user_email=user_email, 
-                   task_id=self.request.id)
-        
-        html_content = f"""
-        <html>
-        <body>
-            <h2>Resultado do Cálculo - Torres Project</h2>
-            <p>Olá!</p>
-            <p>Seu cálculo foi processado com sucesso:</p>
-            <ul>
-                <li><strong>Valor médio do ICMS informado:</strong> R$ {calculation_data['average_icms']:,.2f}</li>
-                <li><strong>Número de faturas informadas:</strong> {calculation_data['bill_count']}</li>
-                <li><strong>Período calculado:</strong> 120 meses</li>
-                <li><strong>Valor calculado:</strong> R$ {calculation_data['valor_calculado']:,.2f}</li>
-                <li><strong>Data:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}</li>
-            </ul>
-            <p>Créditos restantes: {calculation_data['creditos_restantes']}</p>
-            <p>Obrigado por usar o Torres Project!</p>
-        </body>
-        </html>
-        """
-        
-        message = MessageSchema(
-            subject="Resultado do Cálculo - Torres Project",
-            recipients=[user_email],
-            body=html_content,
-            subtype=MessageType.html
+        message = Mail(
+            from_email=settings.MAIL_FROM,
+            to_emails=to_email,
+            subject=subject,
+            html_content=html_content
         )
-        
-        # Como estamos em um worker Celery, precisamos usar um loop assíncrono
-        import asyncio
-        asyncio.run(fastmail.send_message(message))
-        
-        logger.info("Calculation email sent successfully", 
-                   user_email=user_email, 
-                   task_id=self.request.id)
-        
-        return {"status": "sent", "user_email": user_email}
-        
+        sg = SendGridAPIClient(settings.SENDGRID_API_KEY)
+        response = sg.send(message)
+        logger.info(f"Email enviado para {to_email}, status: {response.status_code}")
+        return {"status": "sent", "to": to_email}
     except Exception as exc:
-        logger.error("Failed to send calculation email", 
-                    user_email=user_email, 
-                    error=str(exc), 
-                    task_id=self.request.id)
-        
+        logger.error(f"Falha ao enviar email para {to_email}", error=str(exc))
         if self.request.retries < self.max_retries:
-            logger.info("Retrying email send", 
-                       user_email=user_email, 
-                       retry_count=self.request.retries + 1)
-            raise self.retry(countdown=60 * (2 ** self.request.retries))
-        
+            raise self.retry(countdown=60)
         return {"status": "failed", "error": str(exc)}
 
 
-@celery_app.task(bind=True)
-def send_welcome_email(self, user_email: str, user_name: str = None):
-    """
-    Envia email de boas-vindas para novos usuários
-    """
-    try:
-        logger.info("Sending welcome email", user_email=user_email)
-        
-        html_content = f"""
-        <html>
-        <body>
-            <h2>Bem-vindo ao Torres Project!</h2>
-            <p>Olá{f' {user_name}' if user_name else ''}!</p>
-            <p>Sua conta foi criada com sucesso. Você recebeu 3 créditos gratuitos para começar.</p>
-            <p>Com o Torres Project você pode:</p>
-            <ul>
-                <li>Calcular valores de ICMS de forma rápida e precisa</li>
-                <li>Acessar histórico completo de seus cálculos</li>
-                <li>Integrar com sua aplicação via API</li>
-            </ul>
-            <p>Comece agora mesmo fazendo seu primeiro cálculo!</p>
-            <p>Equipe Torres Project</p>
-        </body>
-        </html>
-        """
-        
-        message = MessageSchema(
-            subject="Bem-vindo ao Torres Project!",
-            recipients=[user_email],
-            body=html_content,
-            subtype=MessageType.html
-        )
-        
-        import asyncio
-        asyncio.run(fastmail.send_message(message))
-        
-        logger.info("Welcome email sent successfully", user_email=user_email)
-        return {"status": "sent", "user_email": user_email}
-        
-    except Exception as exc:
-        logger.error("Failed to send welcome email", 
-                    user_email=user_email, 
-                    error=str(exc))
-        return {"status": "failed", "error": str(exc)}
+# --- FUNÇÕES QUE CHAMAM A TAREFA ---
 
+def send_verification_email(to_email: str, code: str):
+    """Prepara e envia o e-mail de verificação."""
+    subject = f"Seu Código de Verificação: {code}"
+    html_content = f"<h3>Olá!</h3><p>Seu código para ativar sua conta é: <strong>{code}</strong></p><p>Este código expira em 5 minutos.</p>"
+    send_email_task.delay(to_email, subject, html_content)
+
+def send_password_reset_email(to_email: str, code: str):
+    """Prepara e envia o e-mail de redefinição de senha."""
+    subject = f"Redefinição de Senha: {code}"
+    html_content = f"<h3>Olá!</h3><p>Seu código para redefinir sua senha é: <strong>{code}</strong></p><p>Este código expira em 5 minutos.</p>"
+    send_email_task.delay(to_email, subject, html_content)
 
 @celery_app.task
 def process_bulk_calculations(calculation_requests: List[Dict[str, Any]], user_id: int):

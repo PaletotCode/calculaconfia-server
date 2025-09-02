@@ -10,6 +10,7 @@ import string
 from datetime import datetime, timedelta
 from sqlalchemy import cast, or_
 import sqlalchemy as sa
+from ..core.background_tasks import send_verification_email, send_password_reset_email
 
 from fastapi import HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -224,17 +225,12 @@ class UserService:
             db.add(verification_record)
             await db.commit()
             
-            # Simular envio
-            if verification_type == VerificationType.SMS:
-                logger.info("SMS verification code sent", 
-                           phone_number=identifier,
-                           code=verification_code)
+            # Substitua o bloco if/else de simulação por isto:
+            if verification_type == VerificationType.EMAIL:
+                send_verification_email(identifier, verification_code)
+            else: # SMS
+                logger.info("SMS sending is not implemented yet. Simulating.")
                 print(f"📱 SMS SIMULADO para {identifier}: Código {verification_code}")
-            else:
-                logger.info("Email verification code sent", 
-                           email=identifier,
-                           code=verification_code)
-                print(f"📧 EMAIL SIMULADO para {identifier}: Código {verification_code}")
             
             await AuditService.log_action(
                 db=db,
@@ -416,7 +412,7 @@ class UserService:
             
             # Simular envio de email
             logger.info("Password reset code sent", email=email, code=verification_code)
-            print(f"📧 EMAIL SIMULADO para {email}: Código de reset {verification_code}")
+            send_password_reset_email(email, verification_code)
             
             await AuditService.log_action(
                 db=db,
