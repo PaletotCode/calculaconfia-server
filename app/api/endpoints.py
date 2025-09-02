@@ -592,5 +592,137 @@ async def simulate_referral_payment(
             detail="Error simulating payment"
         )
 
+# Adicionar este endpoint em app/api/endpoints.py para debug
+
+@router.get("/dev/sendgrid-status")
+async def sendgrid_debug_status():
+    """
+    Endpoint de debug para verificar configuração do SendGrid
+    TODO: Remover em produção
+    """
+    if settings.ENVIRONMENT != "development":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Endpoint not available in this environment"
+        )
+    
+    import os
+    from sendgrid import SendGridAPIClient
+    
+    # Verificar diferentes formas de carregar a chave
+    key_from_settings = settings.SENDGRID_API_KEY
+    key_from_env = os.getenv('SENDGRID_API_KEY')
+    key_from_environ = os.environ.get('SENDGRID_API_KEY')
+    
+    # Status da chave
+    key_status = {
+        "from_pydantic_settings": "✅ Available" if key_from_settings else "❌ Missing",
+        "from_os_getenv": "✅ Available" if key_from_env else "❌ Missing", 
+        "from_os_environ": "✅ Available" if key_from_environ else "❌ Missing",
+    }
+    
+    # Verificar se as chaves são iguais (se existirem)
+    keys_match = None
+    if key_from_settings and key_from_env:
+        keys_match = key_from_settings == key_from_env
+    
+    # Testar conexão com SendGrid (se chave disponível)
+    sendgrid_test = {"status": "not_tested"}
+    active_key = key_from_settings or key_from_env or key_from_environ
+    
+    if active_key:
+        try:
+            sg = SendGridAPIClient(active_key)
+            # Fazer uma chamada simples para testar a chave
+            response = sg.client.user.email.get()
+            sendgrid_test = {
+                "status": "✅ API Key Valid",
+                "status_code": response.status_code,
+                "user_email": response.body.decode() if response.body else "N/A"
+            }
+        except Exception as e:
+            sendgrid_test = {
+                "status": "❌ API Key Invalid",
+                "error": str(e)
+            }
+    
+    # Mascarar chaves para segurança (mostrar apenas início e fim)
+    def mask_key(key):
+        if not key:
+            return None
+        if len(key) > 20:
+            return f"{key[:10]}...{key[-6:]}"
+        return f"{key[:4]}...{key[-2:]}"
+    
+    return {
+        "sendgrid_configuration": {
+            "mail_from": settings.MAIL_FROM,
+            "mail_from_name": settings.MAIL_FROM_NAME,
+            "environment": settings.ENVIRONMENT
+        },
+        "api_key_status": key_status,
+        "api_key_values": {
+            "from_pydantic_settings": mask_key(key_from_settings),
+            "from_os_getenv": mask_key(key_from_env),
+            "from_os_environ": mask_key(key_from_environ)
+        },
+        "keys_consistency": {
+            "all_sources_match": keys_match,
+            "active_key_source": "pydantic_settings" if key_from_settings else ("os_getenv" if key_from_env else "os_environ" if key_from_environ else "none")
+        },
+        "sendgrid_api_test": sendgrid_test,
+        "recommendations": [
+            "✅ Ensure SENDGRID_API_KEY is set in .env file",
+            "✅ Verify sender email is authenticated in SendGrid dashboard", 
+            "✅ Check SendGrid API key permissions",
+            "✅ Monitor SendGrid usage quotas"
+        ]
+    }
+
+
+@router.post("/dev/test-email")
+async def test_email_sending(
+    email: str = "teste@example.com"
+):
+    """
+    Endpoint para testar envio de email diretamente
+    TODO: Remover em produção
+    """
+    if settings.ENVIRONMENT != "development":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Endpoint not available in this environment"
+        )
+    
+    from ..core.background_tasks import send_email_task
+    
+    try:
+        # Enviar email de teste diretamente (sem Celery)
+        result = send_email_task.delay(
+            to_email=email,
+            subject="🧪 Teste de Email - Torres Project",
+            html_content="""
+            <h2>Teste de Email</h2>
+            <p>Este é um email de teste do sistema Torres Project.</p>
+            <p><strong>Se você recebeu este email, a configuração está funcionando!</strong></p>
+            <hr>
+            <small>Este é um email automático de teste.</small>
+            """
+        )
+        
+        return {
+            "message": "Test email queued successfully",
+            "task_id": result.id,
+            "target_email": email,
+            "check_logs": "Monitor celery worker logs for detailed status"
+        }
+        
+    except Exception as e:
+        logger.error("Test email failed", error=str(e))
+        return {
+            "message": "Test email failed",
+            "error": str(e),
+            "target_email": email
+        }
 
 # REMOVIDOS: Todos os endpoints relacionados a planos (/planos/me, /planos/upgrade) conforme solicitado

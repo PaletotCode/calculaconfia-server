@@ -3,6 +3,7 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from typing import Dict, Any, List
 from datetime import datetime
+import os
 
 from .config import settings
 from .logging_config import get_logger
@@ -29,49 +30,191 @@ celery_app.conf.update(
 
 logger = get_logger(__name__)
 
-# --- TAREFA GENÉRICA DE ENVIO DE EMAIL COM SENDGRID ---
+# 🔥 TAREFA MELHORADA DE ENVIO DE EMAIL COM SENDGRID
 @celery_app.task(bind=True, max_retries=3)
 def send_email_task(self, to_email: str, subject: str, html_content: str):
     """
     Tarefa Celery para enviar e-mails de forma assíncrona usando SendGrid.
     """
-    if not settings.SENDGRID_API_KEY:
+    # 🔥 Debug: Verificar se a chave está disponível no worker
+    sendgrid_key = settings.SENDGRID_API_KEY or os.getenv('SENDGRID_API_KEY')
+    
+    logger.info(f"🔑 SendGrid Key Status: {'✅ Available' if sendgrid_key else '❌ Missing'}")
+    logger.info(f"📧 Attempting to send email to: {to_email}")
+    logger.info(f"📧 Subject: {subject}")
+    
+    if not sendgrid_key:
         logger.warning("SENDGRID_API_KEY não configurada. Simulando envio de email.")
+        logger.warning("🔍 Debug - Environment variables available:")
+        for key in os.environ:
+            if 'SENDGRID' in key or 'MAIL' in key:
+                logger.warning(f"  {key}: {'SET' if os.environ[key] else 'NOT SET'}")
+        
         print(f"📧 EMAIL SIMULADO para {to_email} | Assunto: {subject}")
-        return {"status": "simulated", "to": to_email}
+        return {"status": "simulated", "to": to_email, "reason": "SENDGRID_API_KEY not configured"}
 
     try:
+        # 🔥 Criar mensagem com configurações corretas
         message = Mail(
             from_email=settings.MAIL_FROM,
             to_emails=to_email,
             subject=subject,
             html_content=html_content
         )
-        sg = SendGridAPIClient(settings.SENDGRID_API_KEY)
+        
+        # 🔥 Adicionar nome do remetente
+        message.from_email.name = settings.MAIL_FROM_NAME
+        
+        # Inicializar cliente SendGrid
+        sg = SendGridAPIClient(sendgrid_key)
+        
+        # Enviar email
+        logger.info("🚀 Sending email via SendGrid...")
         response = sg.send(message)
-        logger.info(f"Email enviado para {to_email}, status: {response.status_code}")
-        return {"status": "sent", "to": to_email}
+        
+        logger.info(f"✅ Email sent successfully!")
+        logger.info(f"📊 SendGrid Response - Status: {response.status_code}")
+        logger.info(f"📊 SendGrid Response - Body: {response.body}")
+        logger.info(f"📊 SendGrid Response - Headers: {response.headers}")
+        
+        return {
+            "status": "sent", 
+            "to": to_email,
+            "sendgrid_status": response.status_code,
+            "message_id": response.headers.get('X-Message-Id', 'unknown')
+        }
+        
     except Exception as exc:
-        logger.error(f"Falha ao enviar email para {to_email}", error=str(exc))
+        error_msg = str(exc)
+        logger.error(f"❌ Failed to send email to {to_email}: {error_msg}")
+        
+        # Log detalhado do erro
+        if hasattr(exc, 'status_code'):
+            logger.error(f"📊 SendGrid Error Status: {exc.status_code}")
+        if hasattr(exc, 'body'):
+            logger.error(f"📊 SendGrid Error Body: {exc.body}")
+            
+        # Retry logic
         if self.request.retries < self.max_retries:
+            logger.info(f"🔄 Retrying email send (attempt {self.request.retries + 1}/{self.max_retries})")
             raise self.retry(countdown=60)
-        return {"status": "failed", "error": str(exc)}
+            
+        return {
+            "status": "failed", 
+            "error": error_msg,
+            "to": to_email,
+            "retries_exhausted": True
+        }
 
 
-# --- FUNÇÕES QUE CHAMAM A TAREFA ---
-
+# 🔥 FUNÇÕES MELHORADAS QUE CHAMAM A TAREFA
 def send_verification_email(to_email: str, code: str):
     """Prepara e envia o e-mail de verificação."""
-    subject = f"Seu Código de Verificação: {code}"
-    html_content = f"<h3>Olá!</h3><p>Seu código para ativar sua conta é: <strong>{code}</strong></p><p>Este código expira em 5 minutos.</p>"
-    send_email_task.delay(to_email, subject, html_content)
+    subject = f"🔐 Torres Project - Código de Verificação: {code}"
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Verificação de Conta - Torres Project</title>
+    </head>
+    <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
+            <h1 style="color: white; margin: 0;">Torres Project</h1>
+            <p style="color: white; margin: 10px 0 0 0;">Verificação de Conta</p>
+        </div>
+        
+        <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px;">
+            <h2 style="color: #333; text-align: center;">Bem-vindo(a)!</h2>
+            
+            <p style="color: #666; line-height: 1.6;">
+                Obrigado por se registrar no Torres Project. Para ativar sua conta, utilize o código de verificação abaixo:
+            </p>
+            
+            <div style="background: white; border: 2px solid #667eea; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0;">
+                <h3 style="color: #667eea; margin: 0;">Seu Código de Verificação</h3>
+                <div style="font-size: 32px; font-weight: bold; color: #333; letter-spacing: 5px; margin: 15px 0;">
+                    {code}
+                </div>
+                <p style="color: #999; font-size: 14px; margin: 0;">Este código expira em 5 minutos</p>
+            </div>
+            
+            <p style="color: #666; line-height: 1.6; font-size: 14px;">
+                Se você não solicitou esta verificação, ignore este e-mail.
+            </p>
+            
+            <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+            
+            <p style="color: #999; font-size: 12px; text-align: center;">
+                Torres Project - Sistema de Cálculo de ICMS<br>
+                Este é um e-mail automático, não responda.
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    # Executar tarefa assíncrona
+    logger.info(f"📧 Queueing verification email to: {to_email}")
+    result = send_email_task.delay(to_email, subject, html_content)
+    logger.info(f"📧 Email task queued with ID: {result.id}")
+    return result
 
 def send_password_reset_email(to_email: str, code: str):
     """Prepara e envia o e-mail de redefinição de senha."""
-    subject = f"Redefinição de Senha: {code}"
-    html_content = f"<h3>Olá!</h3><p>Seu código para redefinir sua senha é: <strong>{code}</strong></p><p>Este código expira em 5 minutos.</p>"
-    send_email_task.delay(to_email, subject, html_content)
+    subject = f"🔒 Torres Project - Redefinição de Senha: {code}"
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Redefinição de Senha - Torres Project</title>
+    </head>
+    <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
+            <h1 style="color: white; margin: 0;">Torres Project</h1>
+            <p style="color: white; margin: 10px 0 0 0;">Redefinição de Senha</p>
+        </div>
+        
+        <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px;">
+            <h2 style="color: #333; text-align: center;">Redefinir Senha</h2>
+            
+            <p style="color: #666; line-height: 1.6;">
+                Recebemos uma solicitação para redefinir a senha da sua conta. Use o código abaixo para criar uma nova senha:
+            </p>
+            
+            <div style="background: white; border: 2px solid #f5576c; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0;">
+                <h3 style="color: #f5576c; margin: 0;">Código de Redefinição</h3>
+                <div style="font-size: 32px; font-weight: bold; color: #333; letter-spacing: 5px; margin: 15px 0;">
+                    {code}
+                </div>
+                <p style="color: #999; font-size: 14px; margin: 0;">Este código expira em 5 minutos</p>
+            </div>
+            
+            <p style="color: #666; line-height: 1.6; font-size: 14px;">
+                Se você não solicitou esta redefinição, ignore este e-mail e sua senha permanecerá inalterada.
+            </p>
+            
+            <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+            
+            <p style="color: #999; font-size: 12px; text-align: center;">
+                Torres Project - Sistema de Cálculo de ICMS<br>
+                Este é um e-mail automático, não responda.
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    # Executar tarefa assíncrona
+    logger.info(f"📧 Queueing password reset email to: {to_email}")
+    result = send_email_task.delay(to_email, subject, html_content)
+    logger.info(f"📧 Email task queued with ID: {result.id}")
+    return result
 
+# Outras tarefas permanecem iguais...
 @celery_app.task
 def process_bulk_calculations(calculation_requests: List[Dict[str, Any]], user_id: int):
     """

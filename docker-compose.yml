@@ -6,9 +6,9 @@ services:
     image: postgres:15-alpine
     container_name: torres_postgres
     environment:
-      POSTGRES_DB: torres_db
-      POSTGRES_USER: torres_user
-      POSTGRES_PASSWORD: torres_password
+      POSTGRES_DB: ${POSTGRES_DB:-torres_db}
+      POSTGRES_USER: ${POSTGRES_USER:-torres_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-torres_password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -42,9 +42,13 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
-      SECRET_KEY: super-secret-key-for-development-only-change-in-production
-      ENVIRONMENT: development
+      SECRET_KEY: ${SECRET_KEY:-super-secret-key-for-development-only-change-in-production}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      # ⚠️ IMPORTANTE: SendGrid API Key
       SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      # Configurações de email
+      MAIL_FROM: paletot.business@gmail.com
+      MAIL_FROM_NAME: Torres Project
       LOG_LEVEL: INFO
       LOG_FORMAT: json
     ports:
@@ -63,7 +67,7 @@ services:
       timeout: 10s
       retries: 3
 
-  # Celery Worker
+  # 🔥 CRÍTICO: Celery Worker precisa da SENDGRID_API_KEY também!
   celery_worker:
     build: .
     container_name: torres_celery_worker
@@ -72,8 +76,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
-      SECRET_KEY: super-secret-key-for-development-only-change-in-production
-      ENVIRONMENT: development
+      SECRET_KEY: ${SECRET_KEY:-super-secret-key-for-development-only-change-in-production}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      # ⚠️ IMPORTANTE: O Celery Worker também precisa da chave!
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      MAIL_FROM: paletot.business@gmail.com
+      MAIL_FROM_NAME: Torres Project
       LOG_LEVEL: INFO
       LOG_FORMAT: json
     depends_on:
@@ -94,8 +102,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
-      SECRET_KEY: super-secret-key-for-development-only-change-in-production
-      ENVIRONMENT: development
+      SECRET_KEY: ${SECRET_KEY:-super-secret-key-for-development-only-change-in-production}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      # Beat também pode precisar para tarefas futuras
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY}
       LOG_LEVEL: INFO
       LOG_FORMAT: json
     depends_on:
