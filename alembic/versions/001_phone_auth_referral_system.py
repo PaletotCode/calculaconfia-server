@@ -19,7 +19,7 @@ depends_on = None
 def upgrade() -> None:
     # Criar enum para tipos de verificação
     verification_type_enum = postgresql.ENUM('SMS', 'EMAIL', name='verificationtype')
-    verification_type_enum.create(op.get_bind())
+    verification_type_enum.create(op.get_bind(), checkfirst=True)
     
     # Criar nova tabela verification_codes
     op.create_table('verification_codes',
@@ -65,11 +65,11 @@ def upgrade() -> None:
     # Adicionar novos valores ao enum AuditAction
     # Primeiro, criar o novo enum
     new_audit_action_enum = postgresql.ENUM(
-        'LOGIN', 'LOGOUT', 'CALCULATION', 'CREDIT_PURCHASE', 'PLAN_CHANGE', 
-        'REGISTER', 'PASSWORD_CHANGE', 'VERIFICATION', 'PASSWORD_RESET', 
-        name='auditaction_new'
+    'LOGIN', 'LOGOUT', 'CALCULATION', 'CREDIT_PURCHASE', 'PLAN_CHANGE', 
+    'REGISTER', 'PASSWORD_CHANGE', 'VERIFICATION', 'PASSWORD_RESET', 
+    name='auditaction_new'
     )
-    new_audit_action_enum.create(op.get_bind())
+    new_audit_action_enum.create(op.get_bind(), checkfirst=True)
     
     # Migrar dados do enum antigo para o novo
     op.execute("ALTER TABLE audit_logs ALTER COLUMN action TYPE auditaction_new USING action::text::auditaction_new")
