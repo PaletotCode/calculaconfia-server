@@ -4,6 +4,8 @@ from typing import List, Optional, Dict, Any
 from decimal import Decimal
 import time
 from datetime import datetime, timedelta
+from sqlalchemy import cast
+import sqlalchemy as sa
 
 from fastapi import HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -278,8 +280,15 @@ class CalculationService:
                 start_period_date = most_recent_date - relativedelta(months=119)
                 stmt = select(SelicRate).where(
                     and_(
-                        func.to_date(SelicRate.year::sa.Text || '-' || SelicRate.month::sa.Text, 'YYYY-MM') >= start_period_date,
-                        func.to_date(SelicRate.year::sa.Text || '-' || SelicRate.month::sa.Text, 'YYYY-MM') <= most_recent_date
+                        # Usamos cast para converter os inteiros para texto antes de concatenar
+                        func.to_date(
+                            cast(SelicRate.year, sa.Text) + '-' + cast(SelicRate.month, sa.Text),
+                            'YYYY-MM'
+                        ) >= start_period_date,
+                        func.to_date(
+                            cast(SelicRate.year, sa.Text) + '-' + cast(SelicRate.month, sa.Text),
+                            'YYYY-MM'
+                        ) <= most_recent_date
                     )
                 )
                 selic_results = await db.execute(stmt)
