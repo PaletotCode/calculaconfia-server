@@ -1,5 +1,7 @@
 from ..models_schemas.models import SelicRate, VerificationCode, VerificationType
 from dateutil.relativedelta import relativedelta
+from ..models_schemas.schemas import UserResponse 
+from ..models_schemas.models import VerificationCode, CreditTransaction
 from typing import List, Optional, Dict, Any
 from decimal import Decimal
 import time
@@ -308,7 +310,7 @@ class UserService:
             if not old_active_status:
                 # Dar 3 créditos iniciais com validade de 30 dias
                 user.credits = 3
-                expires_at = datetime.utcnow() + timedelta(days=30)
+                expires_at = datetime.utcnow() + timedelta(days=40)
                 
                 credit_transaction = CreditTransaction(
                     user_id=user.id,

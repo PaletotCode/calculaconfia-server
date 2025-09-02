@@ -1,6 +1,10 @@
 from datetime import timedelta
 from typing import List, Optional
 
+from datetime import datetime
+from sqlalchemy import and_, or_
+from ..models_schemas.models import VerificationCode, CreditTransaction
+
 from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -578,7 +582,7 @@ async def simulate_referral_payment(
         current_user.credits += 3
         
         # Registrar transação de "compra"
-        expires_at = datetime.utcnow() + timedelta(days=30)
+        expires_at = datetime.utcnow() + timedelta(days=40)
         purchase_transaction = CreditTransaction(
             user_id=current_user.id,
             transaction_type="purchase",
