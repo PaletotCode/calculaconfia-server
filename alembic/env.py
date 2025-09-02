@@ -16,7 +16,7 @@ from app.core.database import Base
 
 # Importar todos os modelos para que o Alembic os reconheça
 from app.models_schemas.models import (
-    User, UserPlan, QueryHistory, AuditLog, CreditTransaction, SelicRate
+    User, QueryHistory, AuditLog, CreditTransaction, SelicRate
 )
 
 # this is the Alembic Config object, which provides
