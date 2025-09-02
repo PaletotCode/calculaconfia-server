@@ -126,11 +126,13 @@ async def calcular(
     Executa cálculo de ICMS para o usuário autenticado
     Requer pelo menos 1 crédito disponível
     """
+
+    avg_icms = sum(b.icms_value for b in calculation_data.bills) / len(calculation_data.bills)
     with LogContext(
         endpoint="calcular",
         user_id=current_user.id,
-        valor_icms=calculation_data.valor_icms,
-        numero_meses=calculation_data.numero_meses
+        average_icms=avg_icms,
+        bill_count=len(calculation_data.bills)
     ):
         logger.info("Calculation request received")
         
@@ -140,8 +142,8 @@ async def calcular(
         
         # Enviar email com resultado em background
         email_data = {
-            "valor_icms": calculation_data.valor_icms,
-            "numero_meses": calculation_data.numero_meses,
+            "average_icms": avg_icms,
+            "bill_count": len(calculation_data.bills),
             "valor_calculado": result.valor_calculado,
             "creditos_restantes": result.creditos_restantes
         }

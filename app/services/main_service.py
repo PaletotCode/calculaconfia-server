@@ -1,3 +1,5 @@
+from ..models_schemas.models import SelicRate
+from dateutil.relativedelta import relativedelta
 from typing import List, Optional, Dict, Any
 from decimal import Decimal
 import time
@@ -231,10 +233,12 @@ class CalculationService:
         request: Optional[Request] = None
     ) -> CalculationResponse:
         """
-        Executa cálculo com transação atômica, auditoria completa e cache
+        Executa o cálculo de restituição detalhado com base em faturas
+        reais e aplicação da taxa SELIC histórica.
         """
         start_time = time.time()
-        
+        PIS_COFINS_FACTOR = Decimal("0.037955")
+
         async with AuditService.audit_context(
             db=db,
             action=AuditAction.CALCULATION,
@@ -242,110 +246,110 @@ class CalculationService:
             resource_type="calculation",
             request=request
         ) as request_id:
-            
             try:
-                with LogContext(
-                    user_id=user.id,
-                    valor_icms=calculation_data.valor_icms,
-                    numero_meses=calculation_data.numero_meses,
-                    request_id=request_id
-                ):
-                    logger.info("Starting calculation processing")
-                    
-                    # Verificar limites do plano do usuário
-                    plan_info = await PlanService.get_user_plan(db, user.id)
-                    if plan_info:
-                        daily_calculations = await CalculationService._get_daily_calculation_count(
-                            db, user.id
-                        )
-                        if daily_calculations >= plan_info.max_calculations_per_day:
-                            raise HTTPException(
-                                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                                detail="Daily calculation limit exceeded for your plan"
-                            )
-                    
-                    # Transação atômica para operação crítica
-                    async with db.begin_nested():
-                        # Refresh user para dados mais recentes
-                        await db.refresh(user)
-                        
-                        # Verificar créditos
-                        if user.credits <= 0:
-                            raise HTTPException(
-                                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                                detail="Insufficient credits"
-                            )
-                        
-                        # Decrementar créditos
-                        old_credits = user.credits
-                        user.credits -= 1
-                        
-                        # Executar cálculo
-                        calc_start = time.time()
-                        resultado = calculation_data.valor_icms * (0.0065 + 0.03) * calculation_data.numero_meses
-                        calc_time_ms = int((time.time() - calc_start) * 1000)
-                        
-                        # Extrair informações da requisição
-                        ip_address = None
-                        user_agent = None
-                        if request:
-                            ip_address, user_agent = AuditService.extract_client_info(request)
-                        
-                        # Criar registro no histórico
-                        history_record = QueryHistory(
-                            user_id=user.id,
-                            icms_value=Decimal(str(calculation_data.valor_icms)),
-                            months=calculation_data.numero_meses,
-                            calculated_value=Decimal(str(resultado)),
-                            calculation_time_ms=calc_time_ms,
-                            ip_address=ip_address,
-                            user_agent=user_agent
-                        )
-                        
-                        db.add(history_record)
-                        await db.flush()  # Para obter o ID
-                        
-                        # Registrar transação de crédito
-                        credit_transaction = CreditTransaction(
-                            user_id=user.id,
-                            transaction_type="usage",
-                            amount=-1,
-                            balance_before=old_credits,
-                            balance_after=user.credits,
-                            description="ICMS calculation",
-                            reference_id=f"calc_{history_record.id}"
-                        )
-                        
-                        db.add(credit_transaction)
-                        await db.commit()
-                        
-                        # Commit automático com async with db.begin()
-                    
-                    total_time_ms = int((time.time() - start_time) * 1000)
-                    
-                    logger.info("Calculation completed successfully",
-                               calculation_id=history_record.id,
-                               valor_calculado=resultado,
-                               processing_time_ms=total_time_ms,
-                               creditos_restantes=user.credits)
-                    
-                    return CalculationResponse(
-                        valor_calculado=resultado,
-                        creditos_restantes=user.credits,
-                        calculation_id=history_record.id,
-                        processing_time_ms=total_time_ms
+                # 1. VALIDAÇÃO E PROCESSAMENTO DA ENTRADA
+                if not calculation_data.bills:
+                    raise HTTPException(status.HTTP_400_BAD_REQUEST, "A lista de faturas não pode estar vazia.")
+                if len(calculation_data.bills) > 12:
+                    raise HTTPException(status.HTTP_400_BAD_REQUEST, "Você pode informar no máximo 12 faturas.")
+
+                provided_bills = {}
+                for bill in calculation_data.bills:
+                    try:
+                        # Usamos o primeiro dia do mês para consistência
+                        bill_date = datetime.strptime(bill.issue_date, "%Y-%m").date().replace(day=1)
+                        provided_bills[bill_date] = Decimal(str(bill.icms_value))
+                    except ValueError:
+                        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Formato de data inválido: {bill.issue_date}. Use YYYY-MM.")
+
+                most_recent_date = max(provided_bills.keys())
+
+                # 2. CÁLCULO BASE E MÉDIA
+                base_values = {date: icms * PIS_COFINS_FACTOR for date, icms in provided_bills.items()}
+                average_base_value = sum(base_values.values()) / len(base_values)
+
+                # 3. PREENCHIMENTO DOS 120 MESES
+                all_months_base = {}
+                for i in range(120):
+                    current_month_date = most_recent_date - relativedelta(months=i)
+                    all_months_base[current_month_date] = base_values.get(current_month_date, average_base_value)
+
+                # 4. BUSCA DAS TAXAS SELIC NO BANCO
+                start_period_date = most_recent_date - relativedelta(months=119)
+                stmt = select(SelicRate).where(
+                    and_(
+                        func.to_date(SelicRate.year::sa.Text || '-' || SelicRate.month::sa.Text, 'YYYY-MM') >= start_period_date,
+                        func.to_date(SelicRate.year::sa.Text || '-' || SelicRate.month::sa.Text, 'YYYY-MM') <= most_recent_date
                     )
-                    
+                )
+                selic_results = await db.execute(stmt)
+                # Mapeia data -> taxa para busca rápida
+                selic_rates_map = {datetime(r.year, r.month, 1).date(): r.rate for r in selic_results.scalars()}
+
+                if not selic_rates_map:
+                    raise HTTPException(status.HTTP_404_NOT_FOUND, "Dados da SELIC não encontrados para o período solicitado. Verifique se o banco foi populado.")
+
+                # 5. APLICAÇÃO DA SELIC E SOMA FINAL
+                total_restitution = Decimal("0.0")
+                for date, base_value in all_months_base.items():
+                    selic_rate = selic_rates_map.get(date, Decimal("0.0"))
+                    # Fórmula: valor_corrigido = base * (1 + selic_mensal)
+                    corrected_value = base_value * (Decimal("1.0") + selic_rate)
+                    total_restitution += corrected_value
+
+                resultado_final = float(total_restitution)
+
+                # Transação atômica para registrar o histórico e decrementar crédito
+                async with db.begin_nested():
+                    await db.refresh(user)
+                    if user.credits <= 0:
+                        raise HTTPException(status.HTTP_402_PAYMENT_REQUIRED, "Créditos insuficientes")
+
+                    old_credits = user.credits
+                    user.credits -= 1
+
+                    ip_address, user_agent = AuditService.extract_client_info(request) if request else (None, None)
+
+                    # Salva um resumo no histórico
+                    history_record = QueryHistory(
+                        user_id=user.id,
+                        icms_value=sum(provided_bills.values()) / len(provided_bills), # Média do ICMS informado
+                        months=120, # Sempre calculamos 120 meses
+                        calculated_value=Decimal(str(resultado_final)),
+                        calculation_time_ms=int((time.time() - start_time) * 1000),
+                        ip_address=ip_address,
+                        user_agent=user_agent
+                    )
+                    db.add(history_record)
+                    await db.flush()
+
+                    credit_transaction = CreditTransaction(
+                        user_id=user.id,
+                        transaction_type="usage", amount=-1,
+                        balance_before=old_credits, balance_after=user.credits,
+                        description="Cálculo detalhado de ICMS",
+                        reference_id=f"calc_{history_record.id}"
+                    )
+                    db.add(credit_transaction)
+                    await db.commit()
+
+                total_time_ms = int((time.time() - start_time) * 1000)
+                logger.info("Cálculo detalhado concluído", calculation_id=history_record.id, total_time_ms=total_time_ms)
+
+                return CalculationResponse(
+                    valor_calculado=resultado_final,
+                    creditos_restantes=user.credits,
+                    calculation_id=history_record.id,
+                    processing_time_ms=total_time_ms
+                )
+
             except HTTPException:
+                await db.rollback()
                 raise
             except Exception as e:
-                logger.error("Calculation processing failed", 
-                            error=str(e),
-                            user_id=user.id)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Error processing calculation"
-                )
+                await db.rollback()
+                logger.error("Falha no processamento do cálculo detalhado", error=str(e), user_id=user.id)
+                raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Erro ao processar o cálculo.")
     
     @staticmethod
     async def _get_daily_calculation_count(db: AsyncSession, user_id: int) -> int:

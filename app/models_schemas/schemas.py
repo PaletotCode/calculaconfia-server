@@ -34,9 +34,12 @@ class TokenData(BaseModel):
     email: Optional[str] = None
 
 # ===== Calculation Schemas =====
+class BillInput(BaseModel):
+    icms_value: float
+    issue_date: str  # Formato "YYYY-MM"
+
 class CalculationRequest(BaseModel):
-    valor_icms: float
-    numero_meses: int
+    bills: List[BillInput]
 
 class CalculationResponse(BaseModel):
     valor_calculado: float

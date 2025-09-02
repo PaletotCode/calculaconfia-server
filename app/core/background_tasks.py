@@ -63,8 +63,9 @@ def send_calculation_email(self, user_email: str, calculation_data: Dict[str, An
             <p>Olá!</p>
             <p>Seu cálculo foi processado com sucesso:</p>
             <ul>
-                <li><strong>Valor ICMS:</strong> R$ {calculation_data['valor_icms']:,.2f}</li>
-                <li><strong>Número de meses:</strong> {calculation_data['numero_meses']}</li>
+                <li><strong>Valor médio do ICMS informado:</strong> R$ {calculation_data['average_icms']:,.2f}</li>
+                <li><strong>Número de faturas informadas:</strong> {calculation_data['bill_count']}</li>
+                <li><strong>Período calculado:</strong> 120 meses</li>
                 <li><strong>Valor calculado:</strong> R$ {calculation_data['valor_calculado']:,.2f}</li>
                 <li><strong>Data:</strong> {datetime.now().strftime('%d/%m/%Y %H:%M')}</li>
             </ul>
