@@ -13,7 +13,6 @@ if __name__ == "__main__":
     
     # Iniciar beat scheduler do Celery
     celery_app.start([
-        "celery",
         "-A", "app.core.background_tasks",
         "beat",
         "--loglevel=info",

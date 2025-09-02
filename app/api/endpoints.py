@@ -13,7 +13,6 @@ from fastapi_cache.decorator import cache
 from ..core.database import get_db
 from ..core.security import create_access_token, get_current_active_user
 from ..core.config import settings
-from ..core.background_tasks import send_calculation_email, send_welcome_email
 from ..core.logging_config import get_logger, LogContext
 from ..models_schemas.models import User
 from ..models_schemas.schemas import (
@@ -58,13 +57,6 @@ async def register(
         
         user = await UserService.register_new_user(db, user_data, request)
         
-        # Enviar email de boas-vindas apenas se email fornecido
-        if user.email:
-            background_tasks.add_task(
-                send_welcome_email.delay,
-                user.email,
-                user.first_name or user.phone_number
-            )
         
         return UserResponse(
             id=user.id,
@@ -219,21 +211,6 @@ async def calcular(
         result = await CalculationService.execute_calculation_for_user(
             db, current_user, calculation_data, request
         )
-        
-        # Enviar email com resultado se email disponível
-        if current_user.email:
-            email_data = {
-                "average_icms": avg_icms,
-                "bill_count": len(calculation_data.bills),
-                "valor_calculado": result.valor_calculado,
-                "creditos_restantes": result.creditos_restantes
-            }
-            
-            background_tasks.add_task(
-                send_calculation_email.delay,
-                current_user.email,
-                email_data
-            )
         
         logger.info("Calculation completed successfully",
                    calculation_id=result.calculation_id,
