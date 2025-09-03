@@ -2,6 +2,8 @@ from datetime import timedelta
 from typing import List, Optional
 
 from ..services import payment_service
+from ..services.credit_service import CreditService # Importa o novo serviço
+from ..models_schemas.schemas import PaymentRequest # Adicione um schema para o webhook se necessári
 
 from datetime import datetime
 from sqlalchemy import and_, or_
@@ -728,28 +730,44 @@ async def test_email_sending(
         }
 
 
-# ===== ENDPOINTS DE PAGAMENTO =====
+# ===== ENDPOINTS DE PAGAMENTO (ATUALIZADOS) =====
 @router.post("/payments/create-order")
 async def create_payment_order(
     current_user: User = Depends(get_current_active_user)
 ):
+    """
+    Cria uma ordem de pagamento PIX para o usuário logado.
+    """
     try:
         payment_details = payment_service.create_pix_payment(
             user_id=current_user.id,
-            amount=10.00,
+            amount=10.00, # Valor fixo do pacote de 3 créditos
             description="Pacote de 3 créditos - CalculaConfia"
         )
         return payment_details
     except Exception as e:
+        logger.error(f"Erro ao criar ordem de pagamento: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/payments/webhook")
 async def mercado_pago_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    # Lógica para receber a notificação do Mercado Pago,
-    # verificar se o pagamento foi aprovado, e então
-    # chamar uma função para adicionar créditos ao user_id.
-    # Esta parte é mais complexa e precisa ser feita com cuidado.
-    return {"status": "ok"}
+    """
+    Recebe notificações de pagamento do Mercado Pago (Webhooks).
+    """
+    try:
+        data = await request.json()
+        logger.info("Webhook do Mercado Pago recebido", extra={"data": data})
 
+        # A notificação informa o tipo e o ID do evento [cite: 874]
+        if data.get("type") == "payment" and "data" in data and "id" in data["data"]:
+            payment_id = data["data"]["id"]
+            # Chama o serviço para processar a notificação em background
+            await payment_service.handle_webhook_notification(payment_id, db)
 
-# REMOVIDOS: Todos os endpoints relacionados a planos (/planos/me, /planos/upgrade) conforme solicitado
+        # Responde ao Mercado Pago para confirmar o recebimento [cite: 903]
+        return JSONResponse(content={"status": "received"}, status_code=200)
+    
+    except Exception as e:
+        logger.error(f"Erro no processamento do webhook: {e}", exc_info=True)
+        # Mesmo em caso de erro, retorna 200 para evitar reenvios em loop do MP
+        return JSONResponse(content={"status": "error"}, status_code=200)
