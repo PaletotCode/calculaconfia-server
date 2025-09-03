@@ -1,6 +1,8 @@
 from datetime import timedelta
 from typing import List, Optional
 
+from ..services import payment_service
+
 from datetime import datetime
 from sqlalchemy import and_, or_
 from ..models_schemas.models import VerificationCode, CreditTransaction
@@ -724,5 +726,30 @@ async def test_email_sending(
             "error": str(e),
             "target_email": email
         }
+
+
+# ===== ENDPOINTS DE PAGAMENTO =====
+@router.post("/payments/create-order")
+async def create_payment_order(
+    current_user: User = Depends(get_current_active_user)
+):
+    try:
+        payment_details = payment_service.create_pix_payment(
+            user_id=current_user.id,
+            amount=10.00,
+            description="Pacote de 3 créditos - CalculaConfia"
+        )
+        return payment_details
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/payments/webhook")
+async def mercado_pago_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    # Lógica para receber a notificação do Mercado Pago,
+    # verificar se o pagamento foi aprovado, e então
+    # chamar uma função para adicionar créditos ao user_id.
+    # Esta parte é mais complexa e precisa ser feita com cuidado.
+    return {"status": "ok"}
+
 
 # REMOVIDOS: Todos os endpoints relacionados a planos (/planos/me, /planos/upgrade) conforme solicitado

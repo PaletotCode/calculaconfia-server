@@ -37,3 +37,6 @@ requests
 
 #SMS
 twilio
+
+#Pix 
+mercadopago

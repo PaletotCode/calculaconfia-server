@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     TWILIO_ACCOUNT_SID: Optional[str] = None
     TWILIO_AUTH_TOKEN: Optional[str] = None
     TWILIO_PHONE_NUMBER: Optional[str] = None
+
+    #Mercado pago
+    MERCADO_PAGO_ACCESS_TOKEN: Optional[str] = None
     
     # Email Configuration (VALORES PADRÃO PARA DESENVOLVIMENTO)
     MAIL_USERNAME: str = "paletot.business@gmail.com"
