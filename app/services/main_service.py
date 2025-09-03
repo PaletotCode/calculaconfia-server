@@ -143,29 +143,27 @@ class UserService:
                     
                     db_user.referral_code = referral_code
                     
-                    # Gerar código de verificação
+                    # Gerar código de verificação por E-MAIL
+                    if not db_user.email:
+                        raise HTTPException(status_code=400, detail="O e-mail é obrigatório para o cadastro.")
+
                     verification_code = UserService._generate_verification_code()
                     expires_at = datetime.utcnow() + timedelta(minutes=5)
-                    
+
                     verification_record = VerificationCode(
-                        identifier=user_data.phone_number,
+                        identifier=db_user.email, # <-- MUDANÇA CRÍTICA
                         code=verification_code,
                         expires_at=expires_at,
-                        type=VerificationType.SMS
+                        type=VerificationType.EMAIL # <-- MUDANÇA CRÍTICA
                     )
-                    
+
                     db.add(verification_record)
                     await db.commit()
                     await db.refresh(db_user)
-                    
-                    # Simular envio de SMS
-                    logger.info("SMS verification code sent", 
-                               phone_number=user_data.phone_number,
-                               code=verification_code,  # Em produção, remover este log
-                               user_id=db_user.id)
-                    
-                    print(f"📱 SMS SIMULADO para {user_data.phone_number}: Código {verification_code}")
-                    
+
+                    # Disparar o e-mail de verificação real
+                    send_verification_email(db_user.email, verification_code) # <-- MUDANÇA CRÍTICA
+
                     return db_user
                     
             except IntegrityError:

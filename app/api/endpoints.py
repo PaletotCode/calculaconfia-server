@@ -10,7 +10,8 @@ from datetime import datetime
 from sqlalchemy import and_, or_
 from ..models_schemas.models import VerificationCode, CreditTransaction
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks, JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi_cache.decorator import cache
@@ -731,46 +732,24 @@ async def test_email_sending(
         }
 
 
-# ===== ENDPOINTS DE PAGAMENTO (ATUALIZADOS) =====
+# ===== ENDPOINTS DE PAGAMENTO =====
 @router.post("/payments/create-order")
-async def create_payment_order(
-    current_user: User = Depends(get_current_active_user)
-):
-    """
-    Cria uma ordem de pagamento PIX para o usuário logado.
-    """
+async def create_payment_order(current_user: User = Depends(get_current_active_user)):
     try:
         payment_details = payment_service.create_pix_payment(
             user_id=current_user.id,
-            amount=10.00, # Valor fixo do pacote de 3 créditos
+            amount=10.00,
             description="Pacote de 3 créditos - CalculaConfia"
         )
         return payment_details
     except Exception as e:
-        logger.error(f"Erro ao criar ordem de pagamento: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/payments/webhook")
 async def mercado_pago_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    """
-    Recebe e VALIDA notificações de pagamento do Mercado Pago.
-    """
-    try:
-        # Validação da assinatura para garantir que a requisição é legítima
-        is_valid = await payment_service.validate_webhook_signature(request)
-        if not is_valid:
-            logger.warning("Assinatura de webhook inválida. Requisição ignorada.")
-            raise HTTPException(status_code=400, detail="Invalid signature")
-
-        data = await request.json()
-        logger.info("Webhook do Mercado Pago recebido e validado", extra={"data": data})
-
-        if data.get("type") == "payment" and "data" in data and "id" in data["data"]:
-            payment_id = data["data"]["id"]
+    data = await request.json()
+    if data.get("type") == "payment":
+        payment_id = data.get("data", {}).get("id")
+        if payment_id:
             await payment_service.handle_webhook_notification(payment_id, db)
-
-        return JSONResponse(content={"status": "received"}, status_code=200)
-
-    except Exception as e:
-        logger.error(f"Erro no processamento do webhook: {e}", exc_info=True)
-        return JSONResponse(content={"status": "error"}, status_code=200)
+    return JSONResponse(content={"status": "received"}, status_code=200)
