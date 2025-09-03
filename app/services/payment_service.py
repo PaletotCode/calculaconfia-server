@@ -2,8 +2,12 @@ import mercadopago
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..core.config import settings
-from ..services.main_service import CreditService # Vamos criar este serviço
+from ..services.credit_service import CreditService
 from ..core.logging_config import get_logger
+
+import hmac
+import hashlib
+from fastapi import Request
 
 logger = get_logger(__name__)
 
@@ -92,3 +96,33 @@ async def handle_webhook_notification(data_id: str, db: AsyncSession):
     except Exception as e:
         logger.error(f"Erro ao processar webhook do Mercado Pago: {e}", exc_info=True)
         # Não levanta exceção para que o MP receba status 200 e não reenvie a notificação
+
+
+async def validate_webhook_signature(request: Request) -> bool:
+    """
+    Valida a assinatura do webhook do Mercado Pago conforme a documentação.
+    """
+    x_signature = request.headers.get("x-signature")
+    if not x_signature:
+        return False
+
+    # Extrai o timestamp (ts) e o hash (v1) do header [cite: 847]
+    parts = {k.strip(): v.strip() for k, v in (part.split("=", 1) for part in x_signature.split(","))}
+    ts = parts.get("ts")
+    v1_hash = parts.get("v1")
+
+    if not ts or not v1_hash:
+        return False
+
+    # Obtém os parâmetros da URL da requisição [cite: 839]
+    data_id = request.query_params.get("data.id")
+    
+    # Cria o 'manifest' para assinar [cite: 850]
+    manifest = f"id:{data_id};ts:{ts};"
+
+    # Gera a assinatura HMAC-SHA256 usando sua chave secreta [cite: 857]
+    secret = settings.MERCADO_PAGO_WEBHOOK_SECRET
+    generated_hash = hmac.new(secret.encode(), msg=manifest.encode(), digestmod=hashlib.sha256).hexdigest()
+
+    # Compara a assinatura gerada com a recebida [cite: 858]
+    return hmac.compare_digest(generated_hash, v1_hash)

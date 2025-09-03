@@ -3,13 +3,14 @@ from typing import List, Optional
 
 from ..services import payment_service
 from ..services.credit_service import CreditService # Importa o novo serviço
-from ..models_schemas.schemas import PaymentRequest # Adicione um schema para o webhook se necessári
+
+from fastapi.responses import JSONResponse
 
 from datetime import datetime
 from sqlalchemy import and_, or_
 from ..models_schemas.models import VerificationCode, CreditTransaction
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks, JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi_cache.decorator import cache
@@ -752,22 +753,24 @@ async def create_payment_order(
 @router.post("/payments/webhook")
 async def mercado_pago_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """
-    Recebe notificações de pagamento do Mercado Pago (Webhooks).
+    Recebe e VALIDA notificações de pagamento do Mercado Pago.
     """
     try:
-        data = await request.json()
-        logger.info("Webhook do Mercado Pago recebido", extra={"data": data})
+        # Validação da assinatura para garantir que a requisição é legítima
+        is_valid = await payment_service.validate_webhook_signature(request)
+        if not is_valid:
+            logger.warning("Assinatura de webhook inválida. Requisição ignorada.")
+            raise HTTPException(status_code=400, detail="Invalid signature")
 
-        # A notificação informa o tipo e o ID do evento [cite: 874]
+        data = await request.json()
+        logger.info("Webhook do Mercado Pago recebido e validado", extra={"data": data})
+
         if data.get("type") == "payment" and "data" in data and "id" in data["data"]:
             payment_id = data["data"]["id"]
-            # Chama o serviço para processar a notificação em background
             await payment_service.handle_webhook_notification(payment_id, db)
 
-        # Responde ao Mercado Pago para confirmar o recebimento [cite: 903]
         return JSONResponse(content={"status": "received"}, status_code=200)
-    
+
     except Exception as e:
         logger.error(f"Erro no processamento do webhook: {e}", exc_info=True)
-        # Mesmo em caso de erro, retorna 200 para evitar reenvios em loop do MP
         return JSONResponse(content={"status": "error"}, status_code=200)
