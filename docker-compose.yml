@@ -46,6 +46,9 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       # ⚠️ IMPORTANTE: SendGrid API Key
       SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER}
       # Configurações de email
       MAIL_FROM: paletot.business@gmail.com
       MAIL_FROM_NAME: Torres Project
@@ -80,6 +83,9 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       # ⚠️ IMPORTANTE: O Celery Worker também precisa da chave!
       SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER}
       MAIL_FROM: paletot.business@gmail.com
       MAIL_FROM_NAME: Torres Project
       LOG_LEVEL: INFO
