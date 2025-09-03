@@ -21,7 +21,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from app.core.database import SessionLocal, engine, Base
 from app.core.config import settings
 from app.core.logging_config import configure_logging, get_logger
-from app.models_schemas.models import User, UserPlan, PlanType, QueryHistory, AuditLog, SelicRate
+from app.models_schemas.models import User, QueryHistory, AuditLog, SelicRate
 from app.services.main_service import UserService
 from app.models_schemas.schemas import UserCreate
 
@@ -49,17 +49,7 @@ async def create_admin_user(email: str, password: str):
             
             # Dar créditos extras e plano enterprise
             user.credits = 1000
-            
-            # Criar plano enterprise
-            admin_plan = UserPlan(
-                user_id=user.id,
-                plan_type=PlanType.ENTERPRISE,
-                credits_per_month=1000,
-                max_calculations_per_day=1000,
-                is_active=True
-            )
-            
-            db.add(admin_plan)
+        
             await db.commit()
             
             print(f"✅ Usuário admin criado: {email}")
@@ -212,20 +202,12 @@ async def show_system_stats():
             calc_count = await db.execute(select(func.count(QueryHistory.id)))
             total_calculations = calc_count.scalar()
             
-            # Usuários por plano
-            plan_stats = await db.execute(
-                select(UserPlan.plan_type, func.count(UserPlan.id))
-                .group_by(UserPlan.plan_type)
-            )
             
             print("📊 ESTATÍSTICAS DO SISTEMA")
             print("=" * 40)
             print(f"👥 Total de usuários: {total_users}")
             print(f"🧮 Total de cálculos: {total_calculations}")
-            print("\n📋 Usuários por plano:")
             
-            for plan_type, count in plan_stats:
-                print(f"  • {plan_type.value}: {count}")
             
             # Cálculos hoje
             today = datetime.now().date()

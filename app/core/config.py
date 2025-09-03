@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     SENDGRID_API_KEY: Optional[str] = None
     MAIL_FROM: str = "paletot.business@gmail.com"
     MAIL_FROM_NAME: str = "Torres Project"
+
+    
     
     # Email Configuration (VALORES PADRÃO PARA DESENVOLVIMENTO)
     MAIL_USERNAME: str = "paletot.business@gmail.com"
