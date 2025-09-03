@@ -5,6 +5,8 @@ from typing import Dict, Any, List
 from datetime import datetime
 import os
 
+from twilio.rest import Client
+
 from .config import settings
 from .logging_config import get_logger
 
@@ -309,3 +311,46 @@ celery_app.conf.beat_schedule = {
         'schedule': 2592000.0,  # Mensal (30 dias)
     },
 }
+
+#TAREFA DE ENVIO DE SMS
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+def send_sms_task(self, to_phone_number: str, body: str):
+    """
+    Tarefa Celery para enviar SMS de forma assíncrona usando Twilio.
+    """
+    if not all([settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN, settings.TWILIO_PHONE_NUMBER]):
+        logger.warning("Twilio não configurado. Simulando envio de SMS.")
+        print(f"📱 SMS SIMULADO para {to_phone_number} | Body: {body}")
+        return {"status": "simulated", "to": to_phone_number}
+
+    try:
+        logger.info(f"📱 Attempting to send SMS to: {to_phone_number}")
+        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+
+        message = client.messages.create(
+            body=body,
+            from_=settings.TWILIO_PHONE_NUMBER,
+            to=to_phone_number # O número deve estar no formato E.164, ex: +5511999998888
+        )
+
+        logger.info(f"✅ SMS sent successfully! SID: {message.sid}")
+        return {"status": "sent", "to": to_phone_number, "sid": message.sid}
+
+    except Exception as exc:
+        logger.error(f"❌ Failed to send SMS to {to_phone_number}: {exc}", exc_info=True)
+        # Tenta reenviar a tarefa em caso de falha de rede, etc.
+        raise self.retry(exc=exc)
+
+# 🔥 NOVA FUNÇÃO HELPER
+def send_verification_sms(to_phone_number: str, code: str):
+    """
+    Prepara a mensagem e enfileira a tarefa de envio de SMS de verificação.
+    * Problema resolvido: Padroniza o formato do número para o padrão E.164 (+55) que o Twilio exige.
+    """
+    # Garante que o número esteja no formato internacional E.164
+    if not to_phone_number.startswith('+'):
+        to_phone_number = f"+55{to_phone_number}" # Adiciona o código do Brasil
+
+    body = f"Seu código de verificação para o Torres Project é: {code}"
+    logger.info(f"📱 Queueing verification SMS to: {to_phone_number}")
+    send_sms_task.delay(to_phone_number, body)

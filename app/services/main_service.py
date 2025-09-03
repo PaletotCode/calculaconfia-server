@@ -10,7 +10,7 @@ import string
 from datetime import datetime, timedelta
 from sqlalchemy import cast, or_
 import sqlalchemy as sa
-from ..core.background_tasks import send_verification_email, send_password_reset_email
+from ..core.background_tasks import send_verification_email, send_password_reset_email, send_verification_sms
 
 from fastapi import HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -229,8 +229,8 @@ class UserService:
             if verification_type == VerificationType.EMAIL:
                 send_verification_email(identifier, verification_code)
             else: # SMS
-                logger.info("SMS sending is not implemented yet. Simulating.")
-                print(f"📱 SMS SIMULADO para {identifier}: Código {verification_code}")
+                # Chama a nova função que enfileira a tarefa no Celery.
+                send_verification_sms(identifier, verification_code)
             
             await AuditService.log_action(
                 db=db,
