@@ -34,7 +34,10 @@ class Settings(BaseSettings):
     MAIL_FROM: str = "paletot.business@gmail.com"
     MAIL_FROM_NAME: str = "Torres Project"
 
-    
+    # 🔥 ADICIONADO: Configurações do Twilio
+    TWILIO_ACCOUNT_SID: Optional[str] = None
+    TWILIO_AUTH_TOKEN: Optional[str] = None
+    TWILIO_PHONE_NUMBER: Optional[str] = None
     
     # Email Configuration (VALORES PADRÃO PARA DESENVOLVIMENTO)
     MAIL_USERNAME: str = "paletot.business@gmail.com"
@@ -63,11 +66,25 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# 🔥 Log de debug para verificar se a chave está sendo carregada
+# 🔥 Log de debug para verificar se as chaves estão sendo carregadas
 if settings.ENVIRONMENT == "development":
     sendgrid_status = "✅ Configurada" if settings.SENDGRID_API_KEY else "❌ NÃO Configurada"
     print(f"🔑 SENDGRID_API_KEY: {sendgrid_status}")
+    
+    # 🔥 ADICIONADO: Debug das configurações Twilio
+    twilio_sid_status = "✅ Configurada" if settings.TWILIO_ACCOUNT_SID else "❌ NÃO Configurada"
+    twilio_token_status = "✅ Configurada" if settings.TWILIO_AUTH_TOKEN else "❌ NÃO Configurada"
+    twilio_phone_status = "✅ Configurada" if settings.TWILIO_PHONE_NUMBER else "❌ NÃO Configurada"
+    
+    print(f"🔑 TWILIO_ACCOUNT_SID: {twilio_sid_status}")
+    print(f"🔑 TWILIO_AUTH_TOKEN: {twilio_token_status}")
+    print(f"🔑 TWILIO_PHONE_NUMBER: {twilio_phone_status}")
+    
     if settings.SENDGRID_API_KEY:
         # Mostrar apenas os primeiros 10 caracteres para debug seguro
         masked_key = f"{settings.SENDGRID_API_KEY[:10]}..."
-        print(f"🔑 Chave (parcial): {masked_key}")
+        print(f"🔑 SendGrid Key (parcial): {masked_key}")
+    
+    if settings.TWILIO_ACCOUNT_SID:
+        masked_sid = f"{settings.TWILIO_ACCOUNT_SID[:10]}..."
+        print(f"🔑 Twilio SID (parcial): {masked_sid}")

@@ -341,7 +341,7 @@ def send_sms_task(self, to_phone_number: str, body: str):
         # Tenta reenviar a tarefa em caso de falha de rede, etc.
         raise self.retry(exc=exc)
 
-# 🔥 NOVA FUNÇÃO HELPER
+# 🔥 NOVA FUNÇÃO HELPER CORRIGIDA
 def send_verification_sms(to_phone_number: str, code: str):
     """
     Prepara a mensagem e enfileira a tarefa de envio de SMS de verificação.
@@ -353,4 +353,8 @@ def send_verification_sms(to_phone_number: str, code: str):
 
     body = f"Seu código de verificação para o Torres Project é: {code}"
     logger.info(f"📱 Queueing verification SMS to: {to_phone_number}")
-    send_sms_task.delay(to_phone_number, body)
+    
+    # 🔥 CORREÇÃO: Retornar o resultado da tarefa
+    result = send_sms_task.delay(to_phone_number, body)
+    logger.info(f"📱 SMS task queued with ID: {result.id}")
+    return result
