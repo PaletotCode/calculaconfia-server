@@ -24,8 +24,7 @@ else:
 
 def create_payment_preference(user: User, item_details: dict):
     """
-    Cria uma preferência de pagamento no Mercado Pago.
-    Control F Amigável: create_payment_preference
+    Cria uma preferência de pagamento no Mercado Pago, aceitando APENAS PIX.
     """
     if not sdk:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Sistema de pagamento indisponível.")
@@ -45,7 +44,7 @@ def create_payment_preference(user: User, item_details: dict):
                 "description": "Créditos para a calculadora Torres Project",
                 "category_id": "services",
                 "quantity": 1,
-                "unit_price": float(item_details.get("price", 10.00)), # Garante que seja float
+                "unit_price": float(item_details.get("price", 10.00)),
             }
         ],
         "payer": {
@@ -53,6 +52,24 @@ def create_payment_preference(user: User, item_details: dict):
             "first_name": user.first_name,
             "last_name": user.last_name,
         },
+        # --- INÍCIO DA MODIFICAÇÃO PARA ACEITAR APENAS PIX ---
+        "payment_methods": {
+            "excluded_payment_methods": [
+                {"id": "amex"},
+                {"id": "elo"},
+                {"id": "hipercard"},
+                {"id": "master"},
+                {"id": "visa"},
+            ],
+            "excluded_payment_types": [
+                {"id": "credit_card"},
+                {"id": "debit_card"},
+                {"id": "ticket"}, # Boleto
+                {"id": "atm"},
+            ],
+            "installments": 1
+        },
+        # --- FIM DA MODIFICAÇÃO ---
         "notification_url": f"{public_base_url.rstrip('/')}/api/v1/payments/webhook",
         "statement_descriptor": "TORRESPROJECT",
         "back_urls": {
@@ -68,17 +85,17 @@ def create_payment_preference(user: User, item_details: dict):
     }
 
     try:
-        logger.info("Criando preferência de pagamento para o usuário.", user_id=user.id)
+        logger.info("Criando preferência de pagamento (PIX-only) para o usuário.", user_id=user.id)
         preference_response = sdk.preference().create(preference_data)
         preference = preference_response.get("response")
 
         if not preference or "init_point" not in preference:
             logger.error("Resposta inválida do Mercado Pago ao criar preferência.", response=preference_response)
             raise Exception("Falha ao criar preferência de pagamento no Mercado Pago.")
-        
+
         logger.info("Preferência de pagamento criada com sucesso.", preference_id=preference.get("id"))
         return preference
-    
+
     except Exception as e:
         logger.error(f"Erro na SDK do Mercado Pago ao criar preferência: {e}", exc_info=True)
         raise
