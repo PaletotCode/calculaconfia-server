@@ -22,9 +22,11 @@ if not settings.MERCADO_PAGO_ACCESS_TOKEN:
 else:
     sdk = mercadopago.SDK(settings.MERCADO_PAGO_ACCESS_TOKEN)
 
+# app/services/payment_service.py
+
 def create_payment_preference(user: User, item_details: dict):
     """
-    Cria uma preferência de pagamento no Mercado Pago, aceitando APENAS PIX.
+    Cria uma preferência de pagamento no Mercado Pago, garantindo dados válidos para o pagador.
     """
     if not sdk:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Sistema de pagamento indisponível.")
@@ -35,6 +37,12 @@ def create_payment_preference(user: User, item_details: dict):
     if not public_base_url or not frontend_url:
         logger.error("PUBLIC_BASE_URL e FRONTEND_URL não estão configuradas no ambiente.")
         raise ValueError("Variáveis de ambiente de URL necessárias não foram configuradas.")
+
+    # --- INÍCIO DA CORREÇÃO DE DADOS DO PAGADOR ---
+    # Garante que nome e sobrenome não sejam nulos para o Mercado Pago
+    first_name = user.first_name if user.first_name else "Usuário"
+    last_name = user.last_name if user.last_name else "CalculaConfia"
+    # --- FIM DA CORREÇÃO ---
 
     preference_data = {
         "items": [
@@ -49,27 +57,17 @@ def create_payment_preference(user: User, item_details: dict):
         ],
         "payer": {
             "email": user.email,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
+            "first_name": first_name, # Usando a variável tratada
+            "last_name": last_name,   # Usando a variável tratada
         },
-        # --- INÍCIO DA MODIFICAÇÃO PARA ACEITAR APENAS PIX ---
         "payment_methods": {
-            "excluded_payment_methods": [
-                {"id": "amex"},
-                {"id": "elo"},
-                {"id": "hipercard"},
-                {"id": "master"},
-                {"id": "visa"},
-            ],
+            "excluded_payment_methods": [], # Deixando vazio para aceitar cartões também, se desejar
             "excluded_payment_types": [
-                {"id": "credit_card"},
-                {"id": "debit_card"},
-                {"id": "ticket"}, # Boleto
+                {"id": "ticket"}, # Exclui apenas boleto
                 {"id": "atm"},
             ],
             "installments": 1
         },
-        # --- FIM DA MODIFICAÇÃO ---
         "notification_url": f"{public_base_url.rstrip('/')}/api/v1/payments/webhook",
         "statement_descriptor": "TORRESPROJECT",
         "back_urls": {
@@ -80,12 +78,12 @@ def create_payment_preference(user: User, item_details: dict):
         "external_reference": str(user.id),
         "metadata": {
             "user_id": user.id,
-            "credits_amount": item_details.get("credits", 3)
+            "credits_amount": item_details.get("credits", 3) # Usaremos o valor do pacote
         }
     }
 
     try:
-        logger.info("Criando preferência de pagamento (PIX-only) para o usuário.", user_id=user.id)
+        logger.info("Criando preferência de pagamento para o usuário.", user_id=user.id)
         preference_response = sdk.preference().create(preference_data)
         preference = preference_response.get("response")
 
