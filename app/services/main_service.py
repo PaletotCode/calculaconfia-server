@@ -179,94 +179,97 @@ class UserService:
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Error creating user"
                 )
-    
-    @staticmethod
-    async def send_verification_code(
-        db: AsyncSession,
-        request_data: SendVerificationCodeRequest,
-        request: Optional[Request] = None
-    ) -> VerificationCodeResponse:
-        """
-        Gera e envia código de verificação SOMENTE se o usuário existir E não estiver ativo.
-        """
-        try:
-            identifier = request_data.identifier.strip()
-            
-            stmt_user = select(User).where(
-                or_(User.phone_number == identifier, User.email == identifier)
-            )
-            user_result = await db.execute(stmt_user)
-            user = user_result.scalar_one_or_none()
 
-            if not user:
-                logger.warning("Verification code requested for non-existent user.", identifier=identifier)
-                return VerificationCodeResponse(
-                    message="If an account with this identifier exists, a code has been sent.",
-                    expires_in_minutes=5
+        @staticmethod
+        async def verify_account(
+            db: AsyncSession,
+            request_data: VerifyAccountRequest,
+            request: Optional[Request] = None
+        ) -> UserResponse:
+            """
+            Verifica a conta do usuário, tornando-a ativa, mas NÃO concede créditos.
+            Os créditos são concedidos apenas após o primeiro pagamento.
+            """
+            try:
+                identifier = request_data.identifier.strip()
+                code = request_data.code
+
+                # Buscar código válido
+                stmt = select(VerificationCode).where(
+                    and_(
+                        VerificationCode.identifier == identifier,
+                        VerificationCode.code == code,
+                        VerificationCode.used == False,
+                        VerificationCode.expires_at > datetime.utcnow()
+                    )
+                )
+                verification_record = await db.execute(stmt)
+                verification = verification_record.scalar_one_or_none()
+
+                if not verification:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid or expired verification code"
+                    )
+
+                # Buscar usuário
+                if verification.type == VerificationType.SMS:
+                    stmt = select(User).where(User.phone_number == identifier)
+                else:
+                    stmt = select(User).where(User.email == identifier)
+
+                user_result = await db.execute(stmt)
+                user = user_result.scalar_one_or_none()
+
+                if not user:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="User not found"
+                    )
+
+                # Apenas ativa o usuário. Créditos e código de ref. virão após o pagamento.
+                user.is_verified = True
+                user.is_active = True
+
+                # Marcar código como usado
+                verification.used = True
+
+                await db.commit()
+
+                await AuditService.log_action(
+                    db=db,
+                    action=AuditAction.VERIFICATION,
+                    user_id=user.id,
+                    request=request,
+                    success=True,
+                    resource_type="user_account"
                 )
 
-            # --- NOVA VERIFICAÇÃO ---
-            # Se o usuário já estiver ativo, não faz nada e retorna a mensagem padrão.
-            if user.is_verified and user.is_active:
-                logger.info("Verification code requested for an already active user. No action taken.", identifier=identifier)
-                return VerificationCodeResponse(
-                    message="If an account with this identifier exists, a code has been sent.",
-                    expires_in_minutes=5
-                )
-            # --- FIM DA NOVA VERIFICAÇÃO ---
+                logger.info("Account verified successfully", user_id=user.id)
 
-            import re
-            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-            verification_type = VerificationType.EMAIL if re.match(email_pattern, identifier) else VerificationType.SMS
-            
-            stmt_invalidate = select(VerificationCode).where(
-                and_(
-                    VerificationCode.identifier == identifier,
-                    VerificationCode.used == False,
-                    VerificationCode.expires_at > datetime.utcnow()
+                return UserResponse(
+                    id=user.id,
+                    email=user.email,
+                    phone_number=user.phone_number,
+                    first_name=user.first_name,
+                    last_name=user.last_name,
+                    referral_code=user.referral_code,
+                    credits=user.credits, # Deve ser 0 aqui
+                    is_verified=user.is_verified,
+                    is_active=user.is_active,
+                    is_admin=user.is_admin,
+                    created_at=user.created_at
                 )
-            )
-            existing_codes = await db.execute(stmt_invalidate)
-            for code in existing_codes.scalars():
-                code.used = True
-            
-            verification_code = UserService._generate_verification_code()
-            expires_at = datetime.utcnow() + timedelta(minutes=5)
-            
-            verification_record = VerificationCode(
-                identifier=identifier,
-                code=verification_code,
-                expires_at=expires_at,
-                type=verification_type
-            )
-            
-            db.add(verification_record)
-            await db.commit()
-            
-            if verification_type == VerificationType.EMAIL:
-                send_verification_email(identifier, verification_code)
-            else:
-                send_verification_sms(identifier, verification_code)
-            
-            await AuditService.log_action(
-                db=db,
-                action=AuditAction.VERIFICATION,
-                request=request,
-                success=True,
-                resource_type="verification_code"
-            )
-            
-            return VerificationCodeResponse(
-                message="If an account with this identifier exists, a code has been sent.",
-                expires_in_minutes=5
-            )
-            
-        except Exception as e:
-            logger.error("Failed to send verification code", error=str(e))
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error sending verification code"
-            )
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                await db.rollback() # Garante rollback em caso de erro
+                logger.error("Account verification failed", error=str(e))
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Error verifying account"
+                )
     
     @staticmethod
     async def verify_account(
