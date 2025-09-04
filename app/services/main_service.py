@@ -63,29 +63,28 @@ class UserService:
         request: Optional[Request] = None
     ) -> User:
         """
-        Registra um novo usuário com verificação por telefone e sistema de referência
+        Registra um novo usuário SEM gerar código de referência.
         """
         async with AuditService.audit_context(
             db=db,
             action=AuditAction.REGISTER,
             request=request
         ) as request_id:
-            
+
             try:
                 with LogContext(phone_number=user_data.phone_number, request_id=request_id):
                     logger.info("Starting user registration")
-                    
-                    # Verificar se phone_number já existe
-                    stmt = select(User).where(User.phone_number == user_data.phone_number)
-                    existing_user = await db.execute(stmt)
-                    if existing_user.scalar_one_or_none():
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="Phone number already registered"
-                        )
-                    
-                    # Verificar email se fornecido
-                    referred_by = None
+
+                    # Validações de usuário existente
+                    if user_data.phone_number:
+                        stmt = select(User).where(User.phone_number == user_data.phone_number)
+                        existing_user = await db.execute(stmt)
+                        if existing_user.scalar_one_or_none():
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Phone number already registered"
+                            )
+
                     if user_data.email:
                         stmt = select(User).where(User.email == user_data.email)
                         existing_email = await db.execute(stmt)
@@ -94,8 +93,9 @@ class UserService:
                                 status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="Email already registered"
                             )
-                    
-                    # Verificar código de referência se fornecido
+
+                    # Validação do código de referência aplicado
+                    referred_by = None
                     if user_data.applied_referral_code:
                         stmt = select(User).where(User.referral_code == user_data.applied_referral_code)
                         referrer_result = await db.execute(stmt)
@@ -105,8 +105,8 @@ class UserService:
                                 status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="Invalid referral code"
                             )
-                    
-                    # Criar usuário (inativo até verificação)
+
+                    # Cria o usuário
                     hashed_password = get_password_hash(user_data.password)
                     db_user = User(
                         phone_number=user_data.phone_number,
@@ -115,57 +115,35 @@ class UserService:
                         first_name=user_data.first_name,
                         last_name=user_data.last_name,
                         referred_by_id=referred_by.id if referred_by else None,
-                        is_verified=False,  # Não verificado
-                        is_active=False,    # Não ativo
-                        credits=0           # Zero créditos iniciais
+                        is_verified=False,
+                        is_active=False,
+                        credits=0
+                        # O CÓDIGO DE REFERÊNCIA NÃO É MAIS GERADO AQUI
                     )
-                    
+
                     db.add(db_user)
-                    await db.flush()  # Para obter o ID
-                    
-                    # Gerar código de referência único
-                    referral_code = UserService._generate_referral_code(
-                        user_data.first_name, 
-                        db_user.id
-                    )
-                    
-                    # Garantir que o código seja único
-                    max_attempts = 10
-                    for _ in range(max_attempts):
-                        stmt = select(User).where(User.referral_code == referral_code)
-                        existing_code = await db.execute(stmt)
-                        if not existing_code.scalar_one_or_none():
-                            break
-                        referral_code = UserService._generate_referral_code(
-                            user_data.first_name, 
-                            random.randint(1000, 9999)
-                        )
-                    
-                    db_user.referral_code = referral_code
-                    
-                    # Gerar código de verificação por E-MAIL
+
+                    # Envia o código de verificação
                     if not db_user.email:
                         raise HTTPException(status_code=400, detail="O e-mail é obrigatório para o cadastro.")
 
                     verification_code = UserService._generate_verification_code()
-                    expires_at = datetime.utcnow() + timedelta(minutes=5)
-
+                    expires_at = datetime.utcnow() + timedelta(minutes=10)
                     verification_record = VerificationCode(
-                        identifier=db_user.email, # <-- MUDANÇA CRÍTICA
+                        identifier=db_user.email,
                         code=verification_code,
                         expires_at=expires_at,
-                        type=VerificationType.EMAIL # <-- MUDANÇA CRÍTICA
+                        type=VerificationType.EMAIL
                     )
-
                     db.add(verification_record)
+
                     await db.commit()
                     await db.refresh(db_user)
 
-                    # Disparar o e-mail de verificação real
-                    send_verification_email(db_user.email, verification_code) # <-- MUDANÇA CRÍTICA
+                    send_verification_email(db_user.email, verification_code)
 
                     return db_user
-                    
+
             except IntegrityError:
                 await db.rollback()
                 raise HTTPException(
@@ -180,97 +158,8 @@ class UserService:
                     detail="Error creating user"
                 )
 
-        @staticmethod
-        async def verify_account(
-            db: AsyncSession,
-            request_data: VerifyAccountRequest,
-            request: Optional[Request] = None
-        ) -> UserResponse:
-            """
-            Verifica a conta do usuário, tornando-a ativa, mas NÃO concede créditos.
-            Os créditos são concedidos apenas após o primeiro pagamento.
-            """
-            try:
-                identifier = request_data.identifier.strip()
-                code = request_data.code
+        # app/services/main_service.py
 
-                # Buscar código válido
-                stmt = select(VerificationCode).where(
-                    and_(
-                        VerificationCode.identifier == identifier,
-                        VerificationCode.code == code,
-                        VerificationCode.used == False,
-                        VerificationCode.expires_at > datetime.utcnow()
-                    )
-                )
-                verification_record = await db.execute(stmt)
-                verification = verification_record.scalar_one_or_none()
-
-                if not verification:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Invalid or expired verification code"
-                    )
-
-                # Buscar usuário
-                if verification.type == VerificationType.SMS:
-                    stmt = select(User).where(User.phone_number == identifier)
-                else:
-                    stmt = select(User).where(User.email == identifier)
-
-                user_result = await db.execute(stmt)
-                user = user_result.scalar_one_or_none()
-
-                if not user:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail="User not found"
-                    )
-
-                # Apenas ativa o usuário. Créditos e código de ref. virão após o pagamento.
-                user.is_verified = True
-                user.is_active = True
-
-                # Marcar código como usado
-                verification.used = True
-
-                await db.commit()
-
-                await AuditService.log_action(
-                    db=db,
-                    action=AuditAction.VERIFICATION,
-                    user_id=user.id,
-                    request=request,
-                    success=True,
-                    resource_type="user_account"
-                )
-
-                logger.info("Account verified successfully", user_id=user.id)
-
-                return UserResponse(
-                    id=user.id,
-                    email=user.email,
-                    phone_number=user.phone_number,
-                    first_name=user.first_name,
-                    last_name=user.last_name,
-                    referral_code=user.referral_code,
-                    credits=user.credits, # Deve ser 0 aqui
-                    is_verified=user.is_verified,
-                    is_active=user.is_active,
-                    is_admin=user.is_admin,
-                    created_at=user.created_at
-                )
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                await db.rollback() # Garante rollback em caso de erro
-                logger.error("Account verification failed", error=str(e))
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Error verifying account"
-                )
-    
     @staticmethod
     async def verify_account(
         db: AsyncSession,
@@ -278,12 +167,12 @@ class UserService:
         request: Optional[Request] = None
     ) -> UserResponse:
         """
-        Verifica conta do usuário e ativa
+        Verifica a conta do usuário, tornando-a ativa, mas NÃO concede créditos.
         """
         try:
             identifier = request_data.identifier.strip()
             code = request_data.code
-            
+
             # Buscar código válido
             stmt = select(VerificationCode).where(
                 and_(
@@ -295,55 +184,35 @@ class UserService:
             )
             verification_record = await db.execute(stmt)
             verification = verification_record.scalar_one_or_none()
-            
+
             if not verification:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Invalid or expired verification code"
                 )
-            
+
             # Buscar usuário
             if verification.type == VerificationType.SMS:
-                stmt = select(User).where(User.phone_number == identifier)
+                stmt_user = select(User).where(User.phone_number == identifier)
             else:
-                stmt = select(User).where(User.email == identifier)
-            
-            user_result = await db.execute(stmt)
+                stmt_user = select(User).where(User.email == identifier)
+
+            user_result = await db.execute(stmt_user)
             user = user_result.scalar_one_or_none()
-            
+
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="User not found"
                 )
-            
-            # Ativar usuário e dar créditos iniciais se ainda não ativo
-            old_active_status = user.is_active
+
+            # Apenas ativa o usuário. NENHUM CRÉDITO É CONCEDIDO AQUI.
             user.is_verified = True
             user.is_active = True
-            
-            if not old_active_status:
-                # Dar 3 créditos iniciais com validade de 30 dias
-                user.credits = 3
-                expires_at = datetime.utcnow() + timedelta(days=40)
-                
-                credit_transaction = CreditTransaction(
-                    user_id=user.id,
-                    transaction_type="bonus",
-                    amount=3,
-                    balance_before=0,
-                    balance_after=3,
-                    description="Welcome bonus credits",
-                    reference_id=f"welcome_{user.id}",
-                    expires_at=expires_at
-                )
-                db.add(credit_transaction)
-            
-            # Marcar código como usado
             verification.used = True
-            
+
             await db.commit()
-            
+
             await AuditService.log_action(
                 db=db,
                 action=AuditAction.VERIFICATION,
@@ -352,26 +221,27 @@ class UserService:
                 success=True,
                 resource_type="user_account"
             )
-            
+
             logger.info("Account verified successfully", user_id=user.id)
-            
+
             return UserResponse(
                 id=user.id,
                 email=user.email,
                 phone_number=user.phone_number,
                 first_name=user.first_name,
                 last_name=user.last_name,
-                referral_code=user.referral_code,
-                credits=user.credits,
+                referral_code=user.referral_code, # Será None
+                credits=user.credits,             # Será 0
                 is_verified=user.is_verified,
                 is_active=user.is_active,
                 is_admin=user.is_admin,
                 created_at=user.created_at
             )
-            
+
         except HTTPException:
             raise
         except Exception as e:
+            await db.rollback()
             logger.error("Account verification failed", error=str(e))
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
