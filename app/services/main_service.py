@@ -344,7 +344,6 @@ class UserService:
                 credits=user.credits,
                 is_verified=user.is_verified,
                 is_active=user.is_active,
-                is_active=user.is_active,
                 created_at=user.created_at
             )
             

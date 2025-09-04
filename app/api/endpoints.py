@@ -738,19 +738,43 @@ async def test_email_sending(
 
 
 # ===== ENDPOINTS DE PAGAMENTO =====
+
 @router.post("/payments/create-order")
 async def create_payment_order(current_user: User = Depends(get_current_active_user)):
+    """
+    Cria uma ordem de pagamento para o pacote padrão de 3 créditos.
+    Control F Amigável: create-order
+    """
     try:
-        preference = payment_service.create_payment_preference(current_user)
-        return {"init_point": preference["init_point"]}
+        # Detalhes do item a ser vendido. Pode ser expandido para receber diferentes pacotes.
+        item_details = {
+            "id": "CREDITS-PACK-3",
+            "title": "Pacote Padrão de 3 Créditos",
+            "price": 10.00,
+            "credits": 3
+        }
+        
+        preference = payment_service.create_payment_preference(current_user, item_details)
+        # Retorna o ID da preferência e o ponto de inicialização do checkout
+        return {
+            "preference_id": preference["id"],
+            "init_point": preference["init_point"]
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Falha ao criar ordem de pagamento.", error=str(e), user_id=current_user.id)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Não foi possível iniciar o pagamento.")
 
-@router.post("/payments/webhook")
+
+@router.post("/payments/webhook", status_code=status.HTTP_200_OK)
 async def mercado_pago_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    data = await request.json()
-    if data.get("type") == "payment":
-        payment_id = data.get("data", {}).get("id")
-        if payment_id:
-            await payment_service.handle_webhook_notification(payment_id, db)
-    return JSONResponse(content={"status": "received"}, status_code=200)
+    """
+    Webhook para receber notificações de pagamento do Mercado Pago.
+    Control F Amigável: webhook
+    """
+    # A lógica de processamento foi movida para o payment_service para melhor organização.
+    await payment_service.handle_webhook_notification(request, db)
+    # Sempre retorna 200 OK para o Mercado Pago para confirmar o recebimento.
+    return JSONResponse(content={"status": "notification received"})
+
+# --------------------------------------------------------------------------------
+# --- Controle F: FIM - ENDPOINTS DE PAGAMENTO
