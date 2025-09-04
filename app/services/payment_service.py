@@ -33,6 +33,7 @@ def create_payment_preference(user: User, item_details: dict):
 
     public_base_url = os.getenv("PUBLIC_BASE_URL")
     frontend_url = os.getenv("FRONTEND_URL")
+    seller_email = os.getenv("MERCADO_PAGO_SELLER_EMAIL")
 
     if not public_base_url or not frontend_url:
         logger.error("PUBLIC_BASE_URL e FRONTEND_URL não estão configuradas no ambiente.")
@@ -42,6 +43,21 @@ def create_payment_preference(user: User, item_details: dict):
     # Garante que nome e sobrenome não sejam nulos para o Mercado Pago
     first_name = user.first_name if user.first_name else "Usuário"
     last_name = user.last_name if user.last_name else "CalculaConfia"
+
+    # Evita auto-pagamento: quando o e-mail do comprador é o mesmo do vendedor,
+    # o Checkout Pro desabilita o botão para impedir pagar a si mesmo.
+    if seller_email and user.email and user.email.strip().lower() == seller_email.strip().lower():
+        logger.warning(
+            "Tentativa de auto-pagamento detectada: payer == seller",
+            payer_email=user.email
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Não é possível criar pagamento: o email do pagador é o mesmo da conta vendedora. "
+                "Use um email/conta do Mercado Pago diferente para pagar."
+            ),
+        )
     # --- FIM DA CORREÇÃO ---
 
     preference_data = {
@@ -61,12 +77,14 @@ def create_payment_preference(user: User, item_details: dict):
             "last_name": last_name,   # Usando a variável tratada
         },
         "payment_methods": {
-            "excluded_payment_methods": [], # Deixando vazio para aceitar cartões também, se desejar
+            # Mantém métodos liberados e dá destaque ao PIX.
+            "default_payment_method_id": "pix",
+            "excluded_payment_methods": [],
             "excluded_payment_types": [
-                {"id": "ticket"}, # Exclui apenas boleto
+                {"id": "ticket"},  # Exclui boleto
                 {"id": "atm"},
             ],
-            "installments": 1
+            "installments": 1,
         },
         "notification_url": f"{public_base_url.rstrip('/')}/api/v1/payments/webhook",
         "statement_descriptor": "TORRESPROJECT",
