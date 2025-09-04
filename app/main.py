@@ -8,7 +8,7 @@ import time
 import uuid
 
 from .api.endpoints import router
-from .core.database import init_cache, close_cache, engine, Base
+from .core.database import init_cache, close_cache, engine
 from .core.logging_config import configure_logging, get_logger, LogContext
 from .core.config import settings
 
@@ -30,12 +30,7 @@ async def lifespan(app: FastAPI):
         # Inicializar cache Redis
         await init_cache()
         logger.info("Redis cache initialized successfully")
-        
-        # Criar tabelas do banco de dados
-        #async with engine.begin() as conn:
-            #await conn.run_sync(Base.metadata.create_all)
-        #logger.info("Database tables created successfully")
-        
+
         logger.info("Application startup completed")
         yield
         
@@ -53,11 +48,14 @@ async def lifespan(app: FastAPI):
 # Criar aplicação FastAPI
 app = FastAPI(
     title=settings.APP_NAME,
-    description="API Backend comercial para cálculos de ICMS com auditoria completa, cache Redis, background tasks e sistema de planos",
+    description=(
+        "API Backend comercial para cálculos de ICMS com auditoria completa, "
+        "cache Redis, background tasks e sistema de planos"
+    ),
     version=settings.APP_VERSION,
     lifespan=lifespan,
     docs_url="/docs" if settings.ENVIRONMENT == "development" else None,
-    redoc_url="/redoc" if settings.ENVIRONMENT == "development" else None
+    redoc_url="/redoc" if settings.ENVIRONMENT == "development" else None,
 )
 
 
@@ -131,7 +129,7 @@ async def logging_middleware(request: Request, call_next):
         ip_address=ip_address,
         user_agent=user_agent[:100]  # Truncar user agent
     ):
-        start_time = time.time()
+        start_time = time.perf_counter()
         
         logger.info("Request started",
                    method=request.method,
@@ -143,7 +141,7 @@ async def logging_middleware(request: Request, call_next):
             response = await call_next(request)
             
             # Calcular tempo de processamento
-            process_time = time.time() - start_time
+            process_time = time.perf_counter() - start_time
             
             # Adicionar headers de correlação
             response.headers["X-Request-ID"] = request_id
@@ -158,7 +156,7 @@ async def logging_middleware(request: Request, call_next):
             
         except Exception as e:
             # Log de erro
-            process_time = time.time() - start_time
+            process_time = time.perf_counter() - start_time
             
             logger.error("Request failed",
                         error=str(e),

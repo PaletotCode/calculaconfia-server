@@ -11,21 +11,16 @@ sdk = mercadopago.SDK(settings.MERCADO_PAGO_ACCESS_TOKEN)
 
 def create_pix_payment(user_id: int, amount: float, description: str):
     expiration_time = datetime.utcnow() + timedelta(minutes=30)
-    back_urls = {
-        "success": "https://www.seu-site.com/pagamento/sucesso",
-        "failure": "https://www.seu-site.com/pagamento/falha",
-        "pending": "https://www.seu-site.com/pagamento/pendente"
-    }
 
     payment_data = {
         "transaction_amount": amount,
         "description": description,
         "payment_method_id": "pix",
-        "payer": {"email": f"user-{user_id}@calculaconfia.com"},
+        "payer": {
+            "email": f"user-{user_id}@calculaconfia.com",
+        },
         "external_reference": str(user_id),
-        "date_of_expiration": expiration_time.strftime("%Y-%m-%dT%H:%M:%S.000-03:00"),
-        "back_urls": back_urls,
-        "auto_return": "approved"
+        "date_of_expiration": expiration_time.strftime("%Y-%m-%dT%H:%M:%S.000-03:00")
     }
 
     try:

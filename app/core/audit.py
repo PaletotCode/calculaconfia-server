@@ -248,5 +248,5 @@ class SecurityMonitor:
             "flags": suspicious_flags,
             "actions_last_hour": actions_last_hour,
             "different_ips_today": different_ips,
-            "timestamp": now.isoformat()
+            "timestamp": now.isoformat(),
         }
