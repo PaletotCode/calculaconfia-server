@@ -187,29 +187,49 @@ class UserService:
         request: Optional[Request] = None
     ) -> VerificationCodeResponse:
         """
-        Gera e envia código de verificação por SMS ou email
+        Gera e envia código de verificação SOMENTE se o usuário existir E não estiver ativo.
         """
         try:
             identifier = request_data.identifier.strip()
             
-            # Determinar tipo (email ou telefone)
+            stmt_user = select(User).where(
+                or_(User.phone_number == identifier, User.email == identifier)
+            )
+            user_result = await db.execute(stmt_user)
+            user = user_result.scalar_one_or_none()
+
+            if not user:
+                logger.warning("Verification code requested for non-existent user.", identifier=identifier)
+                return VerificationCodeResponse(
+                    message="If an account with this identifier exists, a code has been sent.",
+                    expires_in_minutes=5
+                )
+
+            # --- NOVA VERIFICAÇÃO ---
+            # Se o usuário já estiver ativo, não faz nada e retorna a mensagem padrão.
+            if user.is_verified and user.is_active:
+                logger.info("Verification code requested for an already active user. No action taken.", identifier=identifier)
+                return VerificationCodeResponse(
+                    message="If an account with this identifier exists, a code has been sent.",
+                    expires_in_minutes=5
+                )
+            # --- FIM DA NOVA VERIFICAÇÃO ---
+
             import re
             email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
             verification_type = VerificationType.EMAIL if re.match(email_pattern, identifier) else VerificationType.SMS
             
-            # Invalidar códigos anteriores não utilizados
-            stmt = select(VerificationCode).where(
+            stmt_invalidate = select(VerificationCode).where(
                 and_(
                     VerificationCode.identifier == identifier,
                     VerificationCode.used == False,
                     VerificationCode.expires_at > datetime.utcnow()
                 )
             )
-            existing_codes = await db.execute(stmt)
+            existing_codes = await db.execute(stmt_invalidate)
             for code in existing_codes.scalars():
                 code.used = True
             
-            # Gerar novo código
             verification_code = UserService._generate_verification_code()
             expires_at = datetime.utcnow() + timedelta(minutes=5)
             
@@ -223,11 +243,9 @@ class UserService:
             db.add(verification_record)
             await db.commit()
             
-            # Substitua o bloco if/else de simulação por isto:
             if verification_type == VerificationType.EMAIL:
                 send_verification_email(identifier, verification_code)
-            else: # SMS
-                # Chama a nova função que enfileira a tarefa no Celery.
+            else:
                 send_verification_sms(identifier, verification_code)
             
             await AuditService.log_action(
@@ -239,7 +257,7 @@ class UserService:
             )
             
             return VerificationCodeResponse(
-                message="Verification code sent successfully",
+                message="If an account with this identifier exists, a code has been sent.",
                 expires_in_minutes=5
             )
             
@@ -344,6 +362,7 @@ class UserService:
                 credits=user.credits,
                 is_verified=user.is_verified,
                 is_active=user.is_active,
+                is_admin=user.is_admin,
                 created_at=user.created_at
             )
             
