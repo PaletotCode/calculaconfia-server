@@ -1,52 +1,66 @@
+import os
 import mercadopago
-from datetime import datetime, timedelta
 from ..core.config import settings
 from ..core.logging_config import get_logger
 from sqlalchemy.ext.asyncio import AsyncSession
+from ..models_schemas.models import User
 
 logger = get_logger(__name__)
 
-# Inicializa o SDK
+# Inicializa o SDK do Mercado Pago
 sdk = mercadopago.SDK(settings.MERCADO_PAGO_ACCESS_TOKEN)
 
-def create_pix_payment(user_id: int, amount: float, description: str):
-    expiration_time = datetime.utcnow() + timedelta(minutes=30)
+def create_payment_preference(user: User):
+    """Cria uma preferência de pagamento no Mercado Pago."""
+    public_base_url = os.getenv("PUBLIC_BASE_URL")
+    frontend_url = os.getenv("FRONTEND_URL")
 
-    payment_data = {
-        "transaction_amount": amount,
-        "description": description,
-        "payment_method_id": "pix",
+    if not public_base_url or not frontend_url:
+        raise ValueError("PUBLIC_BASE_URL and FRONTEND_URL environment variables must be set")
+
+    preference_data = {
+        "items": [
+            {
+                "id": "CREDITS-3",
+                "title": "Pacote de 3 Créditos",
+                "description": "Créditos para usar na calculadora do Torres Project",
+                "category_id": "services",
+                "quantity": 1,
+                "unit_price": 5.00,
+            }
+        ],
         "payer": {
-            "email": f"user-{user_id}@calculaconfia.com",
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
         },
-        "external_reference": str(user_id),
-        "date_of_expiration": expiration_time.strftime("%Y-%m-%dT%H:%M:%S.000-03:00")
+        "notification_url": f"{public_base_url.rstrip('/')}/api/v1/payments/webhook",
+        "statement_descriptor": "TORRESPROJECT",
+        "back_urls": {
+            "success": f"{frontend_url.rstrip('/')}/pagamento/sucesso",
+            "failure": f"{frontend_url.rstrip('/')}/pagamento/falha",
+            "pending": f"{frontend_url.rstrip('/')}/pagamento/pendente",
+        },
+        "external_reference": str(user.id),
     }
 
     try:
-        payment_response = sdk.payment().create(payment_data)
-        payment = payment_response.get("response")
+        preference_response = sdk.preference().create(preference_data)
+        preference = preference_response.get("response", {})
+        preference_id = preference.get("id")
+        init_point = preference.get("init_point")
 
-        if payment and payment.get("status") == "pending":
-            transaction_data = payment.get("point_of_interaction", {}).get("transaction_data", {})
-            qr_code = transaction_data.get("qr_code")
-            qr_code_base64 = transaction_data.get("qr_code_base64")
-            
-            if not qr_code:
-                raise Exception("Dados do PIX não encontrados na resposta do Mercado Pago.")
+        if not preference_id or not init_point:
+            raise Exception("Falha ao criar preferência de pagamento no Mercado Pago.")
 
-            return {"qr_code": qr_code, "qr_code_base64": qr_code_base64, "payment_id": payment.get("id")}
-        else:
-            raise Exception("Falha ao criar pagamento PIX no Mercado Pago.")
+        return {"preference_id": preference_id, "init_point": init_point}
     
     except Exception as e:
         logger.error(f"Erro na SDK do Mercado Pago: {e}", exc_info=True)
         raise
 
 async def handle_webhook_notification(data_id: str, db: AsyncSession):
-    # Esta função será chamada pelo endpoint do webhook
-    # A lógica de adicionar créditos será colocada aqui.
-    # Por enquanto, vamos apenas logar a notificação.
+    """Processa notificações recebidas pelo webhook do Mercado Pago."""
     logger.info(f"Notificação de pagamento recebida para o ID: {data_id}")
-    # Aqui virá a lógica de adicionar créditos, que faremos a seguir.
+    # TODO: implementar lógica de adição de créditos
     pass

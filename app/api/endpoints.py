@@ -736,12 +736,8 @@ async def test_email_sending(
 @router.post("/payments/create-order")
 async def create_payment_order(current_user: User = Depends(get_current_active_user)):
     try:
-        payment_details = payment_service.create_pix_payment(
-            user_id=current_user.id,
-            amount=10.00,
-            description="Pacote de 3 créditos - CalculaConfia"
-        )
-        return payment_details
+        preference = payment_service.create_payment_preference(current_user)
+        return preference
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
