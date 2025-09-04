@@ -1,10 +1,11 @@
 # app/services/credit_service.py (NOVO ARQUIVO)
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
+from sqlalchemy import select
 from datetime import datetime, timedelta
 from ..models_schemas.models import CreditTransaction, User
 from ..core.logging_config import get_logger
+from .main_service import CalculationService
 
 logger = get_logger(__name__)
 
@@ -32,7 +33,7 @@ class CreditService:
                 return
 
             # Adiciona os créditos comprados
-            balance_before = await user.get_valid_credits_balance(db)
+            balance_before = await CalculationService._get_valid_credits_balance(db, user.id)
             expires_at = datetime.utcnow() + timedelta(days=40) # Validade de 40 dias
             
             new_transaction = CreditTransaction(
@@ -78,7 +79,7 @@ class CreditService:
             return # Não processa se o indicador não existe ou já atingiu o limite
 
         # Adiciona 1 crédito bônus ao indicador
-        balance_before = await referrer.get_valid_credits_balance(db)
+        balance_before = await CalculationService._get_valid_credits_balance(db, referrer.id)
         referrer.referral_credits_earned += 1
         
         bonus_transaction = CreditTransaction(

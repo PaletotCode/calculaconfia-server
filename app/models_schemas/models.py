@@ -45,6 +45,7 @@ class User(Base):
     credits = Column(Integer, nullable=False, default=0)
     is_verified = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=False, nullable=False)  # Agora False por padrão
+    is_admin = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 

@@ -17,7 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi_cache.decorator import cache
 
 from ..core.database import get_db
-from ..core.security import create_access_token, get_current_active_user
+from ..core.security import (
+    create_access_token,
+    get_current_active_user,
+    get_current_admin_user,
+)
 from ..core.config import settings
 from ..core.logging_config import get_logger, LogContext
 from ..models_schemas.models import User
@@ -74,6 +78,7 @@ async def register(
             credits=user.credits,
             is_verified=user.is_verified,
             is_active=user.is_active,
+            is_admin=user.is_admin,
             created_at=user.created_at
         )
 
@@ -111,6 +116,7 @@ async def login(
             credits=user.credits,
             is_verified=user.is_verified,
             is_active=user.is_active,
+            is_admin=user.is_admin,
             created_at=user.created_at
         )
         
@@ -290,6 +296,7 @@ async def get_current_user_info(
         credits=valid_credits,  # Mostrar créditos válidos
         is_verified=current_user.is_verified,
         is_active=current_user.is_active,
+        is_admin=current_user.is_admin,
         created_at=current_user.created_at
     )
 
@@ -401,12 +408,11 @@ async def get_valid_credits_balance(
 
 @router.get("/admin/dashboard", response_model=DashboardStats)
 async def admin_dashboard(
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Dashboard administrativo com estatísticas gerais
-    TODO: Implementar verificação de role admin
     """
     with LogContext(endpoint="admin_dashboard", user_id=current_user.id):
         logger.info("Admin dashboard request received")
@@ -420,12 +426,11 @@ async def get_user_audit_logs(
     user_id: int,
     limit: int = 50,
     offset: int = 0,
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Busca logs de auditoria de um usuário específico
-    TODO: Implementar verificação de role admin
     """
     from sqlalchemy import select, desc
     from ..models_schemas.models import AuditLog
@@ -737,7 +742,7 @@ async def test_email_sending(
 async def create_payment_order(current_user: User = Depends(get_current_active_user)):
     try:
         preference = payment_service.create_payment_preference(current_user)
-        return preference
+        return {"init_point": preference["init_point"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
