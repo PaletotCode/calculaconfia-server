@@ -89,7 +89,8 @@ class CreditService:
         referrer_result = await db.execute(select(User).where(User.id == user.referred_by_id))
         referrer = referrer_result.scalar_one_or_none()
 
-        if not referrer or referrer.referral_credits_earned >= 3:
+        # Uso único: o indicador só pode ganhar 1 crédito por seu código no total
+        if not referrer or referrer.referral_credits_earned >= 1:
             return
 
         # Verifica se o bônus já foi concedido PELO indicado

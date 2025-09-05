@@ -7,27 +7,16 @@ from .models import AuditAction, VerificationType
 
 # ===== User Schemas =====
 class UserCreate(BaseModel):
-    phone_number: str  # Agora obrigatório
-    password: str      # Obrigatório
-    email: Optional[EmailStr] = None  # Opcional
+    email: EmailStr  # Obrigatório
+    password: str    # Obrigatório
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     applied_referral_code: Optional[str] = None
-
-    @validator('phone_number')
-    def validate_phone(cls, v):
-        # Validação básica de telefone brasileiro
-        import re
-        phone_pattern = r'^(\+55|55)?[1-9]{2}9?[0-9]{8}$'
-        if not re.match(phone_pattern, v.replace(' ', '').replace('-', '').replace('(', '').replace(')', '')):
-            raise ValueError('Formato de telefone inválido')
-        return v
 
 
 class UserResponse(BaseModel):
     id: int
     email: Optional[EmailStr]
-    phone_number: Optional[str]
     first_name: Optional[str]
     last_name: Optional[str]
     referral_code: Optional[str]
@@ -50,29 +39,16 @@ class Token(BaseModel):
 
 
 class TokenData(BaseModel):
-    identifier: Optional[str] = None  # Email ou telefone
+    identifier: Optional[str] = None  # Email
 
 
 # ===== Verification Schemas =====
 class SendVerificationCodeRequest(BaseModel):
-    identifier: str  # Phone number ou email
-    
-    @validator('identifier')
-    def validate_identifier(cls, v):
-        # Verificar se é email ou telefone
-        import re
-        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        phone_pattern = r'^(\+55|55)?[1-9]{2}9?[0-9]{8}$'
-        
-        clean_identifier = v.replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
-        
-        if not (re.match(email_pattern, v) or re.match(phone_pattern, clean_identifier)):
-            raise ValueError('Deve ser um email válido ou telefone brasileiro válido')
-        return v
+    email: EmailStr
 
 
 class VerifyAccountRequest(BaseModel):
-    identifier: str
+    email: EmailStr
     code: str
     
     @validator('code')
@@ -174,7 +150,7 @@ class ReferralStatsResponse(BaseModel):
     referral_code: str
     total_referrals: int
     referral_credits_earned: int
-    referral_credits_remaining: int  # Máximo 3
+    referral_credits_remaining: int  # Máximo 1
 
 
 # Schemas removidos: UserPlanCreate, UserPlanResponse (conforme solicitado)

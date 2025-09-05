@@ -10,7 +10,7 @@ import string
 from datetime import datetime, timedelta
 from sqlalchemy import cast, or_
 import sqlalchemy as sa
-from ..core.background_tasks import send_verification_email, send_password_reset_email, send_verification_sms
+from ..core.background_tasks import send_verification_email, send_password_reset_email
 
 from fastapi import HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +34,7 @@ logger = get_logger(__name__)
 
 
 class UserService:
-    """Serviço para gerenciamento de usuários com autenticação por telefone"""
+    """Serviço para gerenciamento de usuários com autenticação por email"""
     
     @staticmethod
     def _generate_referral_code(first_name: Optional[str] = None, user_id: Optional[int] = None) -> str:
@@ -72,31 +72,22 @@ class UserService:
         ) as request_id:
 
             try:
-                with LogContext(phone_number=user_data.phone_number, request_id=request_id):
+                with LogContext(email=user_data.email, request_id=request_id):
                     logger.info("Starting user registration")
 
-                    # Validações de usuário existente
-                    if user_data.phone_number:
-                        stmt = select(User).where(User.phone_number == user_data.phone_number)
-                        existing_user = await db.execute(stmt)
-                        if existing_user.scalar_one_or_none():
-                            raise HTTPException(
-                                status_code=status.HTTP_400_BAD_REQUEST,
-                                detail="Phone number already registered"
-                            )
-
-                    if user_data.email:
-                        stmt = select(User).where(User.email == user_data.email)
-                        existing_email = await db.execute(stmt)
-                        if existing_email.scalar_one_or_none():
-                            raise HTTPException(
-                                status_code=status.HTTP_400_BAD_REQUEST,
-                                detail="Email already registered"
-                            )
+                    # Validações de usuário existente (email obrigatório e único)
+                    stmt = select(User).where(User.email == user_data.email)
+                    existing_email = await db.execute(stmt)
+                    if existing_email.scalar_one_or_none():
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Email already registered"
+                        )
 
                     # Validação do código de referência aplicado
                     referred_by = None
                     if user_data.applied_referral_code:
+                        # Dono do código
                         stmt = select(User).where(User.referral_code == user_data.applied_referral_code)
                         referrer_result = await db.execute(stmt)
                         referred_by = referrer_result.scalar_one_or_none()
@@ -105,11 +96,18 @@ class UserService:
                                 status_code=status.HTTP_400_BAD_REQUEST,
                                 detail="Invalid referral code"
                             )
+                        # Uso único: verifica se já existe algum usuário que usou este código
+                        stmt_used = select(User).where(User.referred_by_id == referred_by.id)
+                        used_result = await db.execute(stmt_used)
+                        if used_result.scalar_one_or_none():
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Código já resgatado!"
+                            )
 
                     # Cria o usuário
                     hashed_password = get_password_hash(user_data.password)
                     db_user = User(
-                        phone_number=user_data.phone_number,
                         email=user_data.email,
                         hashed_password=hashed_password,
                         first_name=user_data.first_name,
@@ -123,7 +121,7 @@ class UserService:
 
                     db.add(db_user)
 
-                    # Envia o código de verificação
+                    # Envia o código de verificação por email
                     if not db_user.email:
                         raise HTTPException(status_code=400, detail="O e-mail é obrigatório para o cadastro.")
 
@@ -170,7 +168,7 @@ class UserService:
         Verifica a conta do usuário, tornando-a ativa, mas NÃO concede créditos.
         """
         try:
-            identifier = request_data.identifier.strip()
+            identifier = request_data.email.strip()
             code = request_data.code
 
             # Buscar código válido
@@ -191,11 +189,8 @@ class UserService:
                     detail="Invalid or expired verification code"
                 )
 
-            # Buscar usuário
-            if verification.type == VerificationType.SMS:
-                stmt_user = select(User).where(User.phone_number == identifier)
-            else:
-                stmt_user = select(User).where(User.email == identifier)
+            # Buscar usuário (por email)
+            stmt_user = select(User).where(User.email == identifier)
 
             user_result = await db.execute(stmt_user)
             user = user_result.scalar_one_or_none()
@@ -227,7 +222,6 @@ class UserService:
             return UserResponse(
                 id=user.id,
                 email=user.email,
-                phone_number=user.phone_number,
                 first_name=user.first_name,
                 last_name=user.last_name,
                 referral_code=user.referral_code, # Será None
@@ -398,12 +392,12 @@ class UserService:
     @staticmethod
     async def authenticate_user(
         db: AsyncSession, 
-        identifier: str,  # Phone number ou email
+        identifier: str,  # Email
         password: str,
         request: Optional[Request] = None
     ) -> User:
         """
-        Autentica usuário com telefone ou email
+        Autentica usuário com email
         """
         start_time = time.time()
         
@@ -411,13 +405,8 @@ class UserService:
             with LogContext(identifier=identifier):
                 logger.info("Starting user authentication")
                 
-                # Buscar usuário por telefone ou email
-                stmt = select(User).where(
-                    or_(
-                        User.phone_number == identifier,
-                        User.email == identifier
-                    )
-                )
+                # Buscar usuário por email
+                stmt = select(User).where(User.email == identifier)
                 result = await db.execute(stmt)
                 user = result.scalar_one_or_none()
                 

@@ -34,8 +34,7 @@ class VerificationType(enum.Enum):
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=True)  # Agora opcional
-    phone_number = Column(String, unique=True, index=True, nullable=True)  # Novo campo
+    email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     first_name = Column(String, nullable=True)  # Novo campo
     last_name = Column(String, nullable=True)   # Novo campo

@@ -7,8 +7,8 @@ from ..services.credit_service import CreditService # Importa o novo serviço
 from fastapi.responses import JSONResponse
 
 from datetime import datetime
-from sqlalchemy import and_, or_
-from ..models_schemas.models import VerificationCode, CreditTransaction
+from sqlalchemy import and_
+from ..models_schemas.models import VerificationCode, CreditTransaction, VerificationType
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -42,6 +42,7 @@ from ..models_schemas.schemas import (
     VerificationCodeResponse,
     ReferralStatsResponse
 )
+from pydantic import BaseModel
 from ..services.main_service import (
     UserService,
     CalculationService,
@@ -60,9 +61,9 @@ async def register(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Registra um novo usuário (inativo até verificação por SMS)
+    Registra um novo usuário (inativo até verificação por email)
     """
-    with LogContext(endpoint="register", phone_number=user_data.phone_number):
+    with LogContext(endpoint="register", email=user_data.email):
         logger.info("User registration request received")
         
         user = await UserService.register_new_user(db, user_data, request)
@@ -71,7 +72,6 @@ async def register(
         return UserResponse(
             id=user.id,
             email=user.email,
-            phone_number=user.phone_number,
             first_name=user.first_name,
             last_name=user.last_name,
             referral_code=user.referral_code,
@@ -90,7 +90,7 @@ async def login(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Autentica o usuário com telefone ou email e retorna um token JWT
+    Autentica o usuário por email e retorna um token JWT
     """
     with LogContext(endpoint="login", identifier=form_data.username):
         logger.info("User login request received")
@@ -102,14 +102,13 @@ async def login(
         # Criar token
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
-            data={"sub": user.phone_number or user.email},
+            data={"sub": user.email},
             expires_delta=access_token_expires
         )
         
         user_info = UserResponse(
             id=user.id,
             email=user.email,
-            phone_number=user.phone_number,
             first_name=user.first_name,
             last_name=user.last_name,
             referral_code=user.referral_code,
@@ -137,12 +136,55 @@ async def send_verification_code(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Envia código de verificação por SMS ou email
+    Envia código de verificação por email
     """
-    with LogContext(endpoint="send_verification_code", identifier=request_data.identifier):
+    with LogContext(endpoint="send_verification_code", email=request_data.email):
         logger.info("Verification code request received")
         
-        response = await UserService.send_verification_code(db, request_data, request)
+        # Reuso do fluxo de registro já envia email. Aqui, reenvio do código.
+        # Implementado no UserService.verify_account/request_password_reset, mas mantemos a assinatura.
+        # Para compatibilidade, vamos delegar para request_password_reset-like (envio de código de verificação).
+        from ..services.main_service import UserService as _US
+        class _Req(BaseModel):
+            email: str
+        # Gera código de verificação de conta (não redefinição de senha)
+        from sqlalchemy import select, and_
+        from ..models_schemas.models import VerificationCode
+        from ..services.main_service import UserService as US
+        from ..core.background_tasks import send_verification_email
+        from datetime import datetime, timedelta
+        from fastapi import HTTPException
+
+        # Checa existência do usuário para reenvio
+        from sqlalchemy import select as _select
+        from ..models_schemas.models import User as _User
+        res = await db.execute(_select(_User).where(_User.email == request_data.email))
+        if not res.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Invalida códigos anteriores não usados
+        from sqlalchemy import select as s, and_ as a
+        existing = await db.execute(s(VerificationCode).where(
+            a(
+                VerificationCode.identifier == request_data.email,
+                VerificationCode.used == False,
+                VerificationCode.expires_at > datetime.utcnow()
+            )
+        ))
+        for c in existing.scalars().all():
+            c.used = True
+
+        code = UserService._generate_verification_code()
+        expires_at = datetime.utcnow() + timedelta(minutes=10)
+        db.add(VerificationCode(
+            identifier=request_data.email,
+            code=code,
+            expires_at=expires_at,
+            type=VerificationType.EMAIL
+        ))
+        await db.commit()
+        send_verification_email(request_data.email, code)
+        response = VerificationCodeResponse(message="Verification code sent", expires_in_minutes=10)
         
         return response
 
@@ -156,7 +198,7 @@ async def verify_account(
     """
     Verifica conta do usuário com código SMS/Email
     """
-    with LogContext(endpoint="verify_account", identifier=request_data.identifier):
+    with LogContext(endpoint="verify_account", email=request_data.email):
         logger.info("Account verification request received")
         
         user_response = await UserService.verify_account(db, request_data, request)
@@ -289,7 +331,6 @@ async def get_current_user_info(
     return UserResponse(
         id=current_user.id,
         email=current_user.email,
-        phone_number=current_user.phone_number,
         first_name=current_user.first_name,
         last_name=current_user.last_name,
         referral_code=current_user.referral_code,
@@ -321,7 +362,8 @@ async def get_referral_stats(
         result = await db.execute(stmt)
         total_referrals = result.scalar() or 0
         
-        referral_credits_remaining = max(0, 3 - current_user.referral_credits_earned)
+        # Novo limite: código de indicação é uso único, logo no máximo 1 crédito possível
+        referral_credits_remaining = 0 if current_user.referral_credits_earned >= 1 else 1
         
         return ReferralStatsResponse(
             referral_code=current_user.referral_code,
@@ -522,10 +564,7 @@ async def list_verification_codes(
     
     stmt = select(VerificationCode).where(
         and_(
-            or_(
-                VerificationCode.identifier == current_user.phone_number,
-                VerificationCode.identifier == current_user.email
-            ),
+            VerificationCode.identifier == current_user.email,
             VerificationCode.expires_at > datetime.utcnow()
         )
     ).order_by(desc(VerificationCode.created_at)).limit(10)
@@ -750,7 +789,7 @@ async def create_payment_order(current_user: User = Depends(get_current_active_u
         item_details = {
             "id": "CREDITS-PACK-3",
             "title": "Pacote Padrão de 3 Créditos",
-            "price": 10.00,
+            "price":5.00,
             "credits": 3
         }
         
@@ -774,6 +813,12 @@ async def mercado_pago_webhook(request: Request, db: AsyncSession = Depends(get_
     # A lógica de processamento foi movida para o payment_service para melhor organização.
     await payment_service.handle_webhook_notification(request, db)
     # Sempre retorna 200 OK para o Mercado Pago para confirmar o recebimento.
+    return JSONResponse(content={"status": "notification received"})
+
+# Alguns ambientes do Mercado Pago ainda disparam GET com query params (formato legado)
+@router.get("/payments/webhook", status_code=status.HTTP_200_OK)
+async def mercado_pago_webhook_get(request: Request, db: AsyncSession = Depends(get_db)):
+    await payment_service.handle_webhook_notification(request, db)
     return JSONResponse(content={"status": "notification received"})
 
 # --------------------------------------------------------------------------------

@@ -68,7 +68,7 @@ def create_payment_preference(user: User, item_details: dict):
                 "description": "Créditos para a calculadora Torres Project",
                 "category_id": "services",
                 "quantity": 1,
-                "unit_price": float(item_details.get("price", 10.00)),
+                "unit_price": float(item_details.get("price", 5.00)),
             }
         ],
         "payer": {
@@ -124,65 +124,160 @@ async def handle_webhook_notification(request: Request, db: AsyncSession):
     if not sdk:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Sistema de pagamento indisponível.")
 
-    notification_data = await request.json()
-    logger.info("Notificação de webhook recebida do Mercado Pago.", data=notification_data)
+    # Tenta ler JSON; se falhar, usa query params (formato legado)
+    notification_data = {}
+    try:
+        # Helper para extrair a quantidade de créditos a partir dos itens
+        def _extract_credits_from_items(items):
+            import re
+            total = 0
+            found = False
+            for it in items or []:
+                for key in ("id", "title", "description"):
+                    val = it.get(key)
+                    if not isinstance(val, str):
+                        continue
+                    m = re.search(r"(\d+)", val)
+                    if m:
+                        n = int(m.group(1))
+                        if n > 0:
+                            total += n
+                            found = True
+                            break
+            return total if found else None
+        notification_data = await request.json()
+    except Exception:
+        notification_data = {}
 
-    if notification_data.get("type") != "payment":
-        logger.info("Notificação não é do tipo 'payment'. Ignorando.", type=notification_data.get("type"))
-        return
+    params = dict(request.query_params) if request.query_params else {}
+    notif_type = (
+        (notification_data.get("type") if isinstance(notification_data, dict) else None)
+        or params.get("type")
+        or params.get("topic")
+    )
 
-    payment_id = notification_data.get("data", {}).get("id")
-    if not payment_id:
-        logger.warning("Webhook não contém ID de pagamento.")
-        return
+    logger.info(
+        "Notificação de webhook recebida do Mercado Pago.",
+        type=notif_type,
+        body=notification_data if notification_data else None,
+        query=params if params else None,
+    )
 
     try:
-        # 1. Buscar os detalhes do pagamento na API do Mercado Pago
-        logger.info(f"Buscando detalhes do pagamento {payment_id} no Mercado Pago.")
-        payment_info_response = sdk.payment().get(payment_id)
-        payment_info = payment_info_response.get("response")
+        # Suporta notificações tipo 'payment' (recomendado) e 'merchant_order' (alguns fluxos)
+        if notif_type == "payment":
+            payment_id = (
+                (notification_data.get("data", {}) if isinstance(notification_data, dict) else {}).get("id")
+                or params.get("id")
+            )
+            if not payment_id:
+                logger.warning("Webhook 'payment' sem ID.")
+                return
 
-        if not payment_info:
-            logger.error(f"Não foi possível obter informações do pagamento {payment_id}.")
-            return
+            # 1. Buscar os detalhes do pagamento
+            logger.info(f"Buscando detalhes do pagamento {payment_id} no Mercado Pago.")
+            payment_info_response = sdk.payment().get(payment_id)
+            payment_info = payment_info_response.get("response")
 
-        # 2. Validar o status do pagamento
-        status_pagamento = payment_info.get("status")
-        if status_pagamento != "approved":
-            logger.info(f"Pagamento {payment_id} não está aprovado. Status: {status_pagamento}. Ignorando.")
-            return
+            if not payment_info:
+                logger.error(f"Não foi possível obter informações do pagamento {payment_id}.")
+                return
 
-        # 3. Extrair informações cruciais e metadados
-        user_id = payment_info.get("external_reference")
-        metadata = payment_info.get("metadata", {})
-        credits_to_add = metadata.get("credits_amount")
+            status_pagamento = payment_info.get("status")
+            if status_pagamento != "approved":
+                logger.info(
+                    f"Pagamento {payment_id} não está aprovado. Status: {status_pagamento}. Ignorando.")
+                return
 
-        if not user_id or not credits_to_add:
-            logger.error(f"Faltando 'external_reference' (user_id) ou 'credits_amount' nos metadados do pagamento {payment_id}.")
-            return
+            user_id = payment_info.get("external_reference")
+            metadata = payment_info.get("metadata", {}) or {}
+            credits_to_add = metadata.get("credits_amount")
 
-        user_id = int(user_id)
-        credits_to_add = int(credits_to_add)
+            # Fallback: tentar extrair pelos itens da merchant_order vinculada
+            if not credits_to_add:
+                try:
+                    order = payment_info.get("order") or {}
+                    mo_id = order.get("id") if isinstance(order, dict) else None
+                    if mo_id:
+                        mo_resp = sdk.merchant_order().find_by_id(mo_id)
+                        mo = mo_resp.get("response") or {}
+                        items = mo.get("items") or []
+                        credits_to_add = _extract_credits_from_items(items)
+                except Exception:
+                    credits_to_add = None
 
-        logger.info(
-            f"Pagamento {payment_id} aprovado para o usuário {user_id}. Adicionando {credits_to_add} créditos."
-        )
+            if not user_id or not credits_to_add:
+                logger.error(
+                    f"Faltando 'external_reference' (user_id) ou não foi possível inferir créditos no pagamento {payment_id}.")
+                return
 
-        # 4. Chamar o CreditService para adicionar os créditos de forma atômica
-        await CreditService.add_credits_from_purchase(
-            db=db,
-            user_id=user_id,
-            amount=credits_to_add,
-            payment_id=str(payment_id)
-        )
+            await CreditService.add_credits_from_purchase(
+                db=db,
+                user_id=int(user_id),
+                amount=int(credits_to_add),
+                payment_id=str(payment_id),
+            )
+            logger.info(
+                f"Créditos adicionados via webhook para pagamento {payment_id} e usuário {user_id}.")
 
-        logger.info(f"Processo de webhook para o pagamento {payment_id} concluído com sucesso.")
+        elif notif_type == "merchant_order":
+            order_id = (
+                (notification_data.get("data", {}) if isinstance(notification_data, dict) else {}).get("id")
+                or params.get("id")
+            )
+            if not order_id:
+                logger.warning("Webhook 'merchant_order' sem ID.")
+                return
+
+            logger.info(f"Buscando merchant_order {order_id} no Mercado Pago.")
+            order_info_resp = sdk.merchant_order().find_by_id(order_id)
+            order_info = order_info_resp.get("response")
+            if not order_info:
+                logger.error(f"Não foi possível obter merchant_order {order_id}.")
+                return
+
+            payments = order_info.get("payments", []) or []
+            if not payments:
+                logger.info(f"merchant_order {order_id} sem pagamentos associados.")
+                return
+
+            # Processa todos pagamentos aprovados (idempotência garantida por CreditService)
+            for p in payments:
+                if (p.get("status") or p.get("status_detail")) and p.get("id"):
+                    pid = p.get("id")
+                    logger.info(f"Verificando pagamento {pid} da merchant_order {order_id}")
+                    pay_resp = sdk.payment().get(pid)
+                    pay = pay_resp.get("response")
+                    if not pay:
+                        continue
+                    if pay.get("status") != "approved":
+                        continue
+                    user_id = pay.get("external_reference")
+                    metadata = pay.get("metadata", {}) or {}
+                    credits_to_add = metadata.get("credits_amount")
+                    if not credits_to_add:
+                        items = order_info.get("items") or []
+                        credits_to_add = _extract_credits_from_items(items)
+                    if not user_id or not credits_to_add:
+                        continue
+                    await CreditService.add_credits_from_purchase(
+                        db=db,
+                        user_id=int(user_id),
+                        amount=int(credits_to_add),
+                        payment_id=str(pid),
+                    )
+                    logger.info(
+                        f"Créditos adicionados via merchant_order {order_id} pagamento {pid}.")
+
+        else:
+            logger.info("Tipo de notificação não suportado (ignorado).", type=notif_type)
 
     except Exception as e:
-        logger.error(f"Erro ao processar webhook do Mercado Pago para o pagamento {payment_id}: {e}", exc_info=True)
-        # É importante não levantar uma exceção HTTP aqui para que o Mercado Pago não continue tentando reenviar
-        # indefinidamente se o erro for na nossa lógica interna. O erro já foi logado para análise.
-        pass
+        logger.error(
+            f"Erro ao processar webhook do Mercado Pago: {e}", exc_info=True
+        )
+        # Não propaga exceção para não causar retries excessivos do MP
+        return
 
 # --------------------------------------------------------------------------------
 # --- Controle F: FIM - payment_service.py
