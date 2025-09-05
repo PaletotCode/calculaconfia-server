@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request, status
+import os
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
@@ -65,11 +66,21 @@ if settings.ENVIRONMENT == "production":
     # HTTPS obrigatório em produção
     from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
     app.add_middleware(HTTPSRedirectMiddleware)
-    
-    # Apenas domínios confiáveis
+
+    # Domínios confiáveis (configuráveis via env ALLOWED_HOSTS, separados por vírgula)
+    allowed_hosts_env = os.getenv("ALLOWED_HOSTS")
+    if allowed_hosts_env:
+        allowed_hosts = [h.strip() for h in allowed_hosts_env.split(",") if h.strip()]
+    else:
+        allowed_hosts = [
+            "calculaconfia.com.br",
+            "*.calculaconfia.com.br",
+            "api.calculaconfia.com.br",
+        ]
+
     app.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=["torresproject.com", "*.torresproject.com", "api.torresproject.com"]
+        allowed_hosts=allowed_hosts
     )
 
 
@@ -166,14 +177,15 @@ async def logging_middleware(request: Request, call_next):
 
 
 # Configuração do CORS
+cors_origins_prod = []
+if settings.ENVIRONMENT == "production":
+    # Deriva do FRONTEND_URL e domínios calculaconfia
+    fe = os.getenv("FRONTEND_URL") or "https://calculaconfia.com.br"
+    cors_origins_prod = [fe, "https://calculaconfia.com.br", "https://*.calculaconfia.com.br"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # React dev
-        "http://localhost:8080",  # Vue dev
-        "https://torresproject.com",  # Produção
-        "https://*.torresproject.com"  # Subdomínios
-    ] if settings.ENVIRONMENT == "production" else ["*"],
+    allow_origins=cors_origins_prod if settings.ENVIRONMENT == "production" else ["*"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],

@@ -10,6 +10,48 @@ Stack sugerida
 - Autenticação: JWT Bearer armazenado em `localStorage`/`secure storage` (usar HTTPS em produção)
 - Integração com Mercado Pago: redirecionar para `init_point` (Checkout Pro)
 
+SDK Mercado Pago (Frontend JS v2) — obrigatório
+- Use o SDK oficial no frontend (MP.js v2) para criar/abrir o checkout de forma segura.
+- Public key necessária (defina no ambiente do frontend): `NEXT_PUBLIC_MERCADO_PAGO_PUBLIC_KEY`.
+- Inicialização básica (Next.js):
+  1) Adicione o SDK no `_app` ou no componente de página (somente no cliente):
+     ```tsx
+     import Script from 'next/script'
+     
+     export default function RootLayout({ children }) {
+       return (
+         <html>
+           <body>
+             {children}
+             <Script src="https://sdk.mercadopago.com/js/v2" strategy="afterInteractive" />
+           </body>
+         </html>
+       )
+     }
+     ```
+  2) Instancie o SDK e abra o checkout com a `preference_id` retornada do backend:
+     ```tsx
+     declare global { interface Window { MercadoPago: any } }
+     
+     const PUBLIC_KEY = process.env.NEXT_PUBLIC_MERCADO_PAGO_PUBLIC_KEY!
+     
+     async function openCheckout(preferenceId: string) {
+       const mp = new window.MercadoPago(PUBLIC_KEY, { locale: 'pt-BR' })
+       mp.checkout({ preference: { id: preferenceId } })
+     }
+     
+     async function onBuyCredits() {
+       // 1) Cria a preferência no backend
+       const { preference_id, init_point } = await api('/api/v1/payments/create-order', { method: 'POST' })
+       // 2) Abre pelo SDK (recomendado) OU redireciona para init_point
+       if (window.MercadoPago) return openCheckout(preference_id)
+       window.location.href = init_point
+     }
+     ```
+  Observações:
+  - Estamos usando somente PIX; ignore “Secure Fields” de cartões.
+  - Em produção, garanta HTTPS (pode ser gerenciado por CDN/Cloud — ex.: Cloudflare). Não é necessário mexer no backend para isso.
+
 Ambiente
 - Produção: `calculaconfia.com.br`
   - FRONTEND_URL: `https://calculaconfia.com.br`
@@ -52,7 +94,8 @@ Fluxos
    - Botão “Comprar créditos” → chama POST `/api/v1/payments/create-order` e redireciona para `init_point`.
 
 5) Pagamento (Checkout Pro)
-   - Redirecionar para `init_point` em nova aba ou mesma página.
+   - Preferencial: abrir via SDK (mp.checkout) com `preference_id`.
+   - Alternativa: redirecionar para `init_point` em nova aba ou mesma página.
    - Ao voltar, abrir `/payment/pending`. Mostrar instruções: “Seus créditos serão creditados em até alguns segundos”.
    - Incluir botão “Verificar saldo” que chama GET `/api/v1/credits/balance` em intervalos (polling leve) por até ~60s.
    - Quando saldo > anterior, exibir “Créditos recebidos!” e CTA para `/calcular`.

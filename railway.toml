@@ -1,0 +1,30 @@
+[project]
+name = "calculaconfia"
+
+# Usa o Dockerfile do repositório para buildar as imagens
+[build]
+builder = "Docker"
+
+# Define três serviços a partir do mesmo Dockerfile/imagem
+[[services]]
+name = "api"
+start = "uvicorn app.main:app --host 0.0.0.0 --port 8000"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+[[services]]
+name = "celery_worker"
+start = "python celery_worker.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+[[services]]
+name = "celery_beat"
+start = "python celery_beat.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Observação: Postgres e Redis devem ser adicionados como plugins no projeto existente
+# e suas URLs usadas nas variáveis dos serviços acima (DATABASE_URL, REDIS_URL,
+# CELERY_BROKER_URL, CELERY_RESULT_BACKEND).
+
