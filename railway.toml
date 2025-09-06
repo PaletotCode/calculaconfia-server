@@ -3,7 +3,7 @@ name = "calculaconfia"
 
 # Usa o Dockerfile do repositório para buildar as imagens
 [build]
-builder = "Docker"
+builder = "DOCKERFILE"
 
 # Define três serviços a partir do mesmo Dockerfile/imagem
 [[services]]
