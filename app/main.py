@@ -62,15 +62,24 @@ app = FastAPI(
 
 # ===== MIDDLEWARE DE SEGURANÇA =====
 
+
+
 if settings.ENVIRONMENT == "production":
-    # HTTPS obrigatório em produção
-    from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
-    app.add_middleware(HTTPSRedirectMiddleware)
+    # HTTPS obrigatório em produção (pode ser desativado quando atrás de proxy)
+    enable_https_redirect = os.getenv("ENABLE_HTTPS_REDIRECT", "true").lower() == "true"
+    if enable_https_redirect:
+        from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+        app.add_middleware(HTTPSRedirectMiddleware)
 
     # Domínios confiáveis (configuráveis via env ALLOWED_HOSTS, separados por vírgula)
     allowed_hosts_env = os.getenv("ALLOWED_HOSTS")
     if allowed_hosts_env:
-        allowed_hosts = [h.strip() for h in allowed_hosts_env.split(",") if h.strip()]
+        # Suporta valores com aspas e separados por vírgula
+        allowed_hosts = [
+            h.strip().strip('"').strip("'")
+            for h in allowed_hosts_env.split(",")
+            if h.strip()
+        ]
     else:
         allowed_hosts = [
             "calculaconfia.com.br",
