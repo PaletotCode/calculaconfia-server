@@ -126,4 +126,17 @@ class SelicRate(Base):
     )
 
 
+class IPCARate(Base):
+    __tablename__ = "ipca_rates"
+    id = Column(Integer, primary_key=True, index=True)
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)
+    # Armazena a taxa como um decimal fracionário. Ex: 0,40% será 0.0040
+    rate = Column(Numeric(10, 6), nullable=False)
+
+    __table_args__ = (
+        sa.UniqueConstraint('year', 'month', name='_ipca_year_month_uc'),
+    )
+
+
 # REMOVIDO: Modelo UserPlan foi completamente removido conforme solicitado

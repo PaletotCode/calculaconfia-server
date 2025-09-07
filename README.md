@@ -15,6 +15,9 @@ Sumário
 - Endpoints (APIs) com exemplos
 - Banco de Dados (entidades)
 - Troubleshooting
+ - Cálculo Refatorado (ICMS no PIS/COFINS)
+ - Dados Econômicos (IPCA/SELIC) e Seed
+ - Guia Railway (Deploy + Seed from scratch)
 
 Observação: fluxo é email‑only (telefone removido).
 
@@ -164,3 +167,114 @@ Autenticação: JWT Bearer no header `Authorization: Bearer <TOKEN>` quando indi
   - Webhook no MP: `https://api.calculaconfia.com.br/api/v1/payments/webhook`
 
 Para diretrizes do frontend, consulte `FRONTEND.md`.
+
+## Cálculo Refatorado (ICMS no PIS/COFINS)
+- Entrada do usuário (até 12 faturas):
+  - `icms_value` (valor do ICMS da fatura)
+  - `issue_date` no formato `YYYY-MM` (mês/ano)
+- Linha do tempo do cálculo: 120 meses encerrando no mês mais recente informado.
+- Passos do algoritmo:
+  1. ICMS_BASE = média dos `icms_value` informados.
+  2. Reconstrução do ICMS por IPCA: ancora ICMS_BASE no primeiro mês da janela e aplica o IPCA mês a mês para frente; meses informados são sobrescritos pelos valores reais.
+  3. Indevido mensal: `indevido[m] = ICMS[m] * 0.037955`.
+  4. Atualização pela SELIC: aplica fator cumulativo até o mês final. Exceção: meses informados (reais) não recebem correção (fator = 1.0).
+  5. Resultado: soma de todos os meses corrigidos.
+- Implementação:
+  - Motor: `app/services/calculation_engine.py`.
+  - Serviço: `CalculationService.execute_calculation_for_user` em `app/services/main_service.py`.
+  - Modelos: `SelicRate` e `IPCARate` em `app/models_schemas/models.py`.
+
+### API de Cálculo
+- Endpoint: `POST /api/v1/calcular` (auth Bearer)
+- Body:
+  ```json
+  {
+    "bills": [
+      { "icms_value": 105, "issue_date": "2025-06" },
+      { "icms_value": 110, "issue_date": "2025-07" },
+      { "icms_value": 120, "issue_date": "2025-08" }
+    ]
+  }
+  ```
+- Resposta:
+  ```json
+  {
+    "valor_calculado": 1234.56,
+    "creditos_restantes": 2,
+    "calculation_id": 987,
+    "processing_time_ms": 42
+  }
+  ```
+
+## Dados Econômicos (IPCA/SELIC) e Seed
+### Tabelas
+- `ipca_rates(year, month, rate)` — `rate` em fração mensal (ex.: 0,40% => 0.0040).
+- `selic_rates(year, month, rate)` — `rate` em fração mensal (ex.: 1,16% => 0.0116).
+
+### Arquivo do IPCA
+- Path no repositório: `app/ipca_mensal.csv`.
+- Formato: CSV `;` com cabeçalho `data;valor`.
+- Datas aceitas: `DD/MM/AAAA`, `AAAA-MM-DD`, `MM/AAAA`, `AAAA-MM`.
+- Valor: percentual mensal (`,` ou `%` aceitos). Ex.: `0,40` => 0.40%.
+
+### Comandos Locais (host)
+- Ajuste `DATABASE_URL` para o Postgres do Docker (mapeado em `15432`):
+  - `.env` (host):
+    - `DATABASE_URL=postgresql+asyncpg://torres_user:torres_password@localhost:15432/torres_db`
+- Criar tabelas e popular IPCA/SELIC:
+```
+python app/scripts/manage.py create-tables
+python app/scripts/manage.py seed-ipca app/ipca_mensal.csv
+python app/scripts/manage.py seed-selic selic.txt
+```
+
+### Comandos via Docker (dentro do container API)
+```
+docker compose exec api python app/scripts/manage.py create-tables
+docker compose exec api python app/scripts/manage.py seed-ipca app/ipca_mensal.csv
+docker compose exec api python app/scripts/manage.py seed-selic selic.txt
+```
+
+## Guia Railway (Deploy + Seed from scratch)
+Pré‑requisitos:
+- Conta Railway e Railway CLI (`npm i -g @railway/cli`), `railway login`, `railway link` no projeto.
+- Banco Postgres no Railway (Provisionar plugin Postgres) ou usar sua própria instância.
+
+### Variáveis de Ambiente no Railway
+- Configure em “Variables” (ou `railway variables set`):
+  - `DATABASE_URL` (string de conexão do Postgres gerado pelo Railway)
+  - `REDIS_URL` (se usar Redis gerenciado)
+  - Outras: `SECRET_KEY`, `ENVIRONMENT=production`, `SENDGRID_API_KEY`, `PUBLIC_BASE_URL`, `FRONTEND_URL`, etc.
+
+### Deploy da API
+- Faça deploy do repositório (GitHub) ou via CLI.
+- Certifique‑se de que o build instale dependências e inicie `uvicorn app.main:app`.
+
+### Criar Tabelas em Produção (Railway)
+- Execute o comando dentro do serviço API (com as variáveis já aplicadas):
+```
+railway run "python app/scripts/manage.py create-tables"
+```
+  - Alternativa: abrir um shell `railway shell` e rodar os comandos manualmente.
+
+### Popular IPCA (Railway)
+- Como `app/ipca_mensal.csv` está no repositório, o arquivo estará no container no mesmo caminho.
+- Rode:
+```
+railway run "python app/scripts/manage.py seed-ipca app/ipca_mensal.csv"
+```
+
+### Popular SELIC (Railway)
+- Suba o arquivo `selic.txt` para o repositório (ou empacote via assets) para ficar disponível em `app/selic.txt`.
+- Rode:
+```
+railway run "python app/scripts/manage.py seed-selic app/selic.txt"
+```
+
+### Testar o Cálculo em Produção
+- Faça login no app, adquira créditos, e chame `POST /api/v1/calcular` com o body do exemplo acima.
+
+### Dicas
+- Erros de conexão: verifique `DATABASE_URL` e acessibilidade do Postgres.
+- CSV de IPCA: confirme `data;valor` e encoding UTF‑8 (BOM aceito).
+- Caso algum mês de SELIC não exista, o cálculo usa 0% para aquele mês (recomendado popular o período completo).

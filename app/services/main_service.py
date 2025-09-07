@@ -22,13 +22,15 @@ from ..core.logging_config import get_logger, LogContext
 from ..core.audit import AuditService, SecurityMonitor
 from ..models_schemas.models import (
     User, QueryHistory, AuditAction, 
-    CreditTransaction, AuditLog
+    CreditTransaction, AuditLog, SelicRate, IPCARate
 )
 from ..models_schemas.schemas import (
     UserCreate, CalculationRequest, CalculationResponse,
     DashboardStats, SendVerificationCodeRequest, VerifyAccountRequest,
     RequestPasswordResetRequest, ResetPasswordRequest, VerificationCodeResponse
 )
+
+from .calculation_engine import compute_total_refund
 
 logger = get_logger(__name__)
 
@@ -566,18 +568,31 @@ class CalculationService:
                         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Formato de data inválido: {bill.issue_date}. Use YYYY-MM.")
 
                 most_recent_date = max(provided_bills.keys())
-                base_values = {date: icms * PIS_COFINS_FACTOR for date, icms in provided_bills.items()}
-                average_base_value = sum(base_values.values()) / len(base_values)
 
-                # Preenchimento dos 120 meses
-                all_months_base = {}
-                for i in range(120):
-                    current_month_date = most_recent_date - relativedelta(months=i)
-                    all_months_base[current_month_date] = base_values.get(current_month_date, average_base_value)
-
-                # Buscar taxas SELIC
+                # Período de 120 meses
                 start_period_date = most_recent_date - relativedelta(months=119)
-                stmt = select(SelicRate).where(
+
+                # Buscar taxas IPCA do período
+                ipca_stmt = select(IPCARate).where(
+                    and_(
+                        func.to_date(
+                            cast(IPCARate.year, sa.Text) + '-' + cast(IPCARate.month, sa.Text),
+                            'YYYY-MM'
+                        ) >= start_period_date,
+                        func.to_date(
+                            cast(IPCARate.year, sa.Text) + '-' + cast(IPCARate.month, sa.Text),
+                            'YYYY-MM'
+                        ) <= most_recent_date
+                    )
+                )
+                ipca_results = await db.execute(ipca_stmt)
+                ipca_rates_map = {datetime(r.year, r.month, 1).date(): r.rate for r in ipca_results.scalars()}
+
+                if not ipca_rates_map:
+                    raise HTTPException(status.HTTP_404_NOT_FOUND, "Dados do IPCA não encontrados para o período solicitado.")
+
+                # Buscar taxas SELIC do período
+                selic_stmt = select(SelicRate).where(
                     and_(
                         func.to_date(
                             cast(SelicRate.year, sa.Text) + '-' + cast(SelicRate.month, sa.Text),
@@ -589,20 +604,22 @@ class CalculationService:
                         ) <= most_recent_date
                     )
                 )
-                selic_results = await db.execute(stmt)
+                selic_results = await db.execute(selic_stmt)
                 selic_rates_map = {datetime(r.year, r.month, 1).date(): r.rate for r in selic_results.scalars()}
 
                 if not selic_rates_map:
-                    raise HTTPException(status.HTTP_404_NOT_FOUND, "Dados da SELIC não encontrados para o período solicitado.")
+                    # Mantém compatibilidade: se faltar SELIC, assume 0% (mas recomenda-se popular)
+                    selic_rates_map = {}
 
-                # Aplicação da SELIC
-                total_restitution = Decimal("0.0")
-                for date, base_value in all_months_base.items():
-                    selic_rate = selic_rates_map.get(date, Decimal("0.0"))
-                    corrected_value = base_value * (Decimal("1.0") + selic_rate)
-                    total_restitution += corrected_value
+                # Cálculo segundo a nova especificação (IPCA + indevido + SELIC cumulativa)
+                total_decimal, _breakdown = compute_total_refund(
+                    provided_icms=provided_bills,
+                    most_recent=most_recent_date,
+                    ipca_rates=ipca_rates_map,
+                    selic_rates=selic_rates_map,
+                )
 
-                resultado_final = float(total_restitution)
+                resultado_final = float(total_decimal)
 
                 # Transação atômica para registrar histórico e consumir crédito
                 async with db.begin_nested():
