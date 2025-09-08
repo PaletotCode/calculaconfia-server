@@ -32,7 +32,7 @@ celery_app.conf.update(
 
 logger = get_logger(__name__)
 
-# 🔥 TAREFA MELHORADA DE ENVIO DE EMAIL COM SENDGRID
+# TAREFA DE ENVIO DE EMAIL COM SENDGRID
 @celery_app.task(bind=True, max_retries=3)
 def send_email_task(self, to_email: str, subject: str, html_content: str):
     """
@@ -41,9 +41,9 @@ def send_email_task(self, to_email: str, subject: str, html_content: str):
     # 🔥 Debug: Verificar se a chave está disponível no worker
     sendgrid_key = settings.SENDGRID_API_KEY or os.getenv('SENDGRID_API_KEY')
     
-    logger.info(f"🔑 SendGrid Key Status: {'✅ Available' if sendgrid_key else '❌ Missing'}")
-    logger.info(f"📧 Attempting to send email to: {to_email}")
-    logger.info(f"📧 Subject: {subject}")
+    logger.info(f"SendGrid Key Status: {'Available' if sendgrid_key else 'Missing'}")
+    logger.info(f"Attempting to send email to: {to_email}")
+    logger.info(f"Subject: {subject}")
     
     if not sendgrid_key:
         logger.warning("SENDGRID_API_KEY não configurada. Simulando envio de email.")
@@ -64,20 +64,20 @@ def send_email_task(self, to_email: str, subject: str, html_content: str):
             html_content=html_content
         )
         
-        # 🔥 Adicionar nome do remetente
-        message.from_email.name = settings.MAIL_FROM_NAME
+        # Adicionar nome do remetente (fallback para CalculaConfia)
+        message.from_email.name = settings.MAIL_FROM_NAME or "CalculaConfia"
         
         # Inicializar cliente SendGrid
         sg = SendGridAPIClient(sendgrid_key)
         
         # Enviar email
-        logger.info("🚀 Sending email via SendGrid...")
+        logger.info("Sending email via SendGrid...")
         response = sg.send(message)
         
-        logger.info(f"✅ Email sent successfully!")
-        logger.info(f"📊 SendGrid Response - Status: {response.status_code}")
-        logger.info(f"📊 SendGrid Response - Body: {response.body}")
-        logger.info(f"📊 SendGrid Response - Headers: {response.headers}")
+        logger.info(f"Email sent successfully")
+        logger.info(f"SendGrid Response - Status: {response.status_code}")
+        logger.info(f"SendGrid Response - Body: {response.body}")
+        logger.info(f"SendGrid Response - Headers: {response.headers}")
         
         return {
             "status": "sent", 
@@ -88,17 +88,17 @@ def send_email_task(self, to_email: str, subject: str, html_content: str):
         
     except Exception as exc:
         error_msg = str(exc)
-        logger.error(f"❌ Failed to send email to {to_email}: {error_msg}")
+        logger.error(f"Failed to send email to {to_email}: {error_msg}")
         
         # Log detalhado do erro
         if hasattr(exc, 'status_code'):
-            logger.error(f"📊 SendGrid Error Status: {exc.status_code}")
+            logger.error(f"SendGrid Error Status: {exc.status_code}")
         if hasattr(exc, 'body'):
-            logger.error(f"📊 SendGrid Error Body: {exc.body}")
+            logger.error(f"SendGrid Error Body: {exc.body}")
             
         # Retry logic
         if self.request.retries < self.max_retries:
-            logger.info(f"🔄 Retrying email send (attempt {self.request.retries + 1}/{self.max_retries})")
+            logger.info(f"Retrying email send (attempt {self.request.retries + 1}/{self.max_retries})")
             raise self.retry(countdown=60)
             
         return {
@@ -111,109 +111,125 @@ def send_email_task(self, to_email: str, subject: str, html_content: str):
 
 # 🔥 FUNÇÕES MELHORADAS QUE CHAMAM A TAREFA
 def send_verification_email(to_email: str, code: str):
-    """Prepara e envia o e-mail de verificação."""
-    subject = f"🔐 Torres Project - Código de Verificação: {code}"
-    
+    """Prepara e envia o e-mail de verificação (branding CalculaConfia)."""
+    subject = "CalculaConfia - Código de verificação"
+
     html_content = f"""
     <!DOCTYPE html>
-    <html>
+    <html lang=\"pt-BR\">
     <head>
-        <meta charset="UTF-8">
-        <title>Verificação de Conta - Torres Project</title>
+        <meta charset=\"UTF-8\">
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+        <title>Verificação de conta - CalculaConfia</title>
     </head>
-    <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
-            <h1 style="color: white; margin: 0;">Torres Project</h1>
-            <p style="color: white; margin: 10px 0 0 0;">Verificação de Conta</p>
-        </div>
-        
-        <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px;">
-            <h2 style="color: #333; text-align: center;">Bem-vindo(a)!</h2>
-            
-            <p style="color: #666; line-height: 1.6;">
-                Obrigado por se registrar no Torres Project. Para ativar sua conta, utilize o código de verificação abaixo:
-            </p>
-            
-            <div style="background: white; border: 2px solid #667eea; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0;">
-                <h3 style="color: #667eea; margin: 0;">Seu Código de Verificação</h3>
-                <div style="font-size: 32px; font-weight: bold; color: #333; letter-spacing: 5px; margin: 15px 0;">
-                    {code}
-                </div>
-                <p style="color: #999; font-size: 14px; margin: 0;">Este código expira em 5 minutos</p>
-            </div>
-            
-            <p style="color: #666; line-height: 1.6; font-size: 14px;">
-                Se você não solicitou esta verificação, ignore este e-mail.
-            </p>
-            
-            <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
-            
-            <p style="color: #999; font-size: 12px; text-align: center;">
-                Torres Project - Sistema de Cálculo de ICMS<br>
-                Este é um e-mail automático, não responda.
-            </p>
-        </div>
+    <body style=\"margin:0; padding:0; background:#f1f5f9; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, 'Helvetica Neue', sans-serif; color:#0f172a;\">
+      <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"background:#f1f5f9;\">
+        <tr>
+          <td>
+            <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"600\" align=\"center\" style=\"width:100%; max-width:600px; margin:40px auto; background:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 2px 8px rgba(30,41,59,0.05);\">
+              <tr>
+                <td style=\"padding:20px 24px; background:#1e293b; border-bottom:4px solid #16a34a;\">
+                  <div style=\"font-size:20px; line-height:24px; color:#f8fafc; font-weight:600;\">CalculaConfia</div>
+                </td>
+              </tr>
+              <tr>
+                <td style=\"padding:28px 24px 8px 24px;\">
+                  <div style=\"font-size:18px; font-weight:600; color:#0f172a;\">Código de verificação</div>
+                  <p style=\"margin:12px 0 0 0; font-size:14px; color:#0f172a;\">Use o código abaixo para confirmar seu e‑mail e ativar sua conta.</p>
+                </td>
+              </tr>
+              <tr>
+                <td style=\"padding:8px 24px 24px 24px;\">
+                  <div style=\"border:1px solid #e2e8f0; border-radius:10px; padding:20px; text-align:center;\">
+                    <div style=\"font-size:14px; color:#1e293b; margin-bottom:8px;\">Seu código</div>
+                    <div style=\"font-size:32px; letter-spacing:6px; font-weight:700; color:#16a34a;\">{code}</div>
+                    <div style=\"margin-top:10px; font-size:12px; color:#475569;\">O código expira em 10 minutos</div>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td style=\"padding:0 24px 28px 24px;\">
+                  <p style=\"margin:0; font-size:12px; color:#475569;\">Se você não solicitou este e‑mail, ignore esta mensagem.</p>
+                </td>
+              </tr>
+              <tr>
+                <td style=\"padding:16px 24px; background:#f8fafc; text-align:center;\">
+                  <div style=\"font-size:12px; color:#475569;\">© {datetime.utcnow().year} CalculaConfia</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
     </body>
     </html>
     """
-    
+
     # Executar tarefa assíncrona
-    logger.info(f"📧 Queueing verification email to: {to_email}")
+    logger.info(f"Queueing verification email to: {to_email}")
     result = send_email_task.delay(to_email, subject, html_content)
-    logger.info(f"📧 Email task queued with ID: {result.id}")
+    logger.info(f"Email task queued with ID: {result.id}")
     return result
 
 def send_password_reset_email(to_email: str, code: str):
-    """Prepara e envia o e-mail de redefinição de senha."""
-    subject = f"🔒 Torres Project - Redefinição de Senha: {code}"
+    """Prepara e envia o e-mail de redefinição de senha (branding CalculaConfia)."""
+    subject = "CalculaConfia - Redefinição de senha"
     
     html_content = f"""
     <!DOCTYPE html>
-    <html>
+    <html lang=\"pt-BR\">
     <head>
-        <meta charset="UTF-8">
-        <title>Redefinição de Senha - Torres Project</title>
+        <meta charset=\"UTF-8\">
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+        <title>Redefinição de senha - CalculaConfia</title>
     </head>
-    <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
-            <h1 style="color: white; margin: 0;">Torres Project</h1>
-            <p style="color: white; margin: 10px 0 0 0;">Redefinição de Senha</p>
-        </div>
-        
-        <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px;">
-            <h2 style="color: #333; text-align: center;">Redefinir Senha</h2>
-            
-            <p style="color: #666; line-height: 1.6;">
-                Recebemos uma solicitação para redefinir a senha da sua conta. Use o código abaixo para criar uma nova senha:
-            </p>
-            
-            <div style="background: white; border: 2px solid #f5576c; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0;">
-                <h3 style="color: #f5576c; margin: 0;">Código de Redefinição</h3>
-                <div style="font-size: 32px; font-weight: bold; color: #333; letter-spacing: 5px; margin: 15px 0;">
-                    {code}
-                </div>
-                <p style="color: #999; font-size: 14px; margin: 0;">Este código expira em 5 minutos</p>
-            </div>
-            
-            <p style="color: #666; line-height: 1.6; font-size: 14px;">
-                Se você não solicitou esta redefinição, ignore este e-mail e sua senha permanecerá inalterada.
-            </p>
-            
-            <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
-            
-            <p style="color: #999; font-size: 12px; text-align: center;">
-                Torres Project - Sistema de Cálculo de ICMS<br>
-                Este é um e-mail automático, não responda.
-            </p>
-        </div>
+    <body style=\"margin:0; padding:0; background:#f1f5f9; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, 'Helvetica Neue', sans-serif; color:#0f172a;\">
+      <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"background:#f1f5f9;\">
+        <tr>
+          <td>
+            <table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"600\" align=\"center\" style=\"width:100%; max-width:600px; margin:40px auto; background:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 2px 8px rgba(30,41,59,0.05);\">
+              <tr>
+                <td style=\"padding:20px 24px; background:#1e293b; border-bottom:4px solid #16a34a;\">
+                  <div style=\"font-size:20px; line-height:24px; color:#f8fafc; font-weight:600;\">CalculaConfia</div>
+                </td>
+              </tr>
+              <tr>
+                <td style=\"padding:28px 24px 8px 24px;\">
+                  <div style=\"font-size:18px; font-weight:600; color:#0f172a;\">Redefinição de senha</div>
+                  <p style=\"margin:12px 0 0 0; font-size:14px; color:#0f172a;\">Use o código abaixo para criar uma nova senha.</p>
+                </td>
+              </tr>
+              <tr>
+                <td style=\"padding:8px 24px 24px 24px;\">
+                  <div style=\"border:1px solid #e2e8f0; border-radius:10px; padding:20px; text-align:center;\">
+                    <div style=\"font-size:14px; color:#1e293b; margin-bottom:8px;\">Código de confirmação</div>
+                    <div style=\"font-size:32px; letter-spacing:6px; font-weight:700; color:#16a34a;\">{code}</div>
+                    <div style=\"margin-top:10px; font-size:12px; color:#475569;\">O código expira em 5 minutos</div>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td style=\"padding:0 24px 28px 24px;\">
+                  <p style=\"margin:0; font-size:12px; color:#475569;\">Se você não solicitou esta operação, ignore esta mensagem.</p>
+                </td>
+              </tr>
+              <tr>
+                <td style=\"padding:16px 24px; background:#f8fafc; text-align:center;\">
+                  <div style=\"font-size:12px; color:#475569;\">© {datetime.utcnow().year} CalculaConfia</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
     </body>
     </html>
     """
     
     # Executar tarefa assíncrona
-    logger.info(f"📧 Queueing password reset email to: {to_email}")
+    logger.info(f"Queueing password reset email to: {to_email}")
     result = send_email_task.delay(to_email, subject, html_content)
-    logger.info(f"📧 Email task queued with ID: {result.id}")
+    logger.info(f"Email task queued with ID: {result.id}")
     return result
 
 # Outras tarefas permanecem iguais...
