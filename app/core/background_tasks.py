@@ -112,7 +112,8 @@ def send_email_task(self, to_email: str, subject: str, html_content: str):
 # 🔥 FUNÇÕES MELHORADAS QUE CHAMAM A TAREFA
 def send_verification_email(to_email: str, code: str):
     """Prepara e envia o e-mail de verificação (branding CalculaConfia)."""
-    subject = "CalculaConfia - Código de verificação"
+    # Coloca o código diretamente no título para facilitar no push/lockscreen
+    subject = f"Código de verificação: {code} · CalculaConfia"
 
     html_content = f"""
     <!DOCTYPE html>
@@ -173,7 +174,8 @@ def send_verification_email(to_email: str, code: str):
 
 def send_password_reset_email(to_email: str, code: str):
     """Prepara e envia o e-mail de redefinição de senha (branding CalculaConfia)."""
-    subject = "CalculaConfia - Redefinição de senha"
+    # Inclui o código no título para visualização imediata
+    subject = f"Código para redefinir senha: {code} · CalculaConfia"
     
     html_content = f"""
     <!DOCTYPE html>
