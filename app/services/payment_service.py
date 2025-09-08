@@ -71,10 +71,12 @@ def create_payment_preference(user: User, item_details: dict):
                 "unit_price": float(item_details.get("price", 5.00)),
             }
         ],
+        # Para Checkout Pro, o objeto payer usa chaves 'name' e 'surname'
+        # (em Payments API direta seriam 'first_name'/'last_name').
         "payer": {
             "email": user.email,
-            "first_name": first_name, # Usando a variável tratada
-            "last_name": last_name,   # Usando a variável tratada
+            "name": first_name,
+            "surname": last_name,
         },
         "payment_methods": {
             # Mantém métodos liberados e dá destaque ao PIX.
