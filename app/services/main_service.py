@@ -140,6 +140,17 @@ class UserService:
                     await db.commit()
                     await db.refresh(db_user)
 
+                    # Tenta enviar o e-mail de verificação, mas não falha o registro se houver
+                    # algum problema de infraestrutura (ex: broker do Celery indisponível).
+                    try:
+                        send_verification_email(db_user.email, verification_code)
+                    except Exception as e:
+                        # Apenas registra o erro; o usuário é criado normalmente.
+                        logger.error(
+                            "Failed to queue verification email",
+                            error=str(e)
+                        )
+
                     send_verification_email(db_user.email, verification_code)
 
                     return db_user

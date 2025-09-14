@@ -165,3 +165,93 @@ Domínio
 - Produção: `calculaconfia.com.br` para frontend e `api.calculaconfia.com.br` para backend (sugerido).
 - Configurar CORS no backend para o domínio do frontend.
 
+Visão Geral
+
+Base API: NEXT_PUBLIC_API_URL aponta para /api/v1 do backend (produção e dev).
+Auth por JWT Bearer; endpoints já prontos.
+Cálculo consome 1 crédito; compra via Mercado Pago (Checkout Pro).
+Variáveis de Ambiente (Frontend)
+
+NEXT_PUBLIC_API_URL: ex. dev http://localhost:8000/api/v1, prod https://calculaconfia-production.up.railway.app/api/v1
+NEXT_PUBLIC_PUBLIC_BASE_URL (opcional): URL pública do site para links canônicos/SEO.
+Cores (Design Tokens)
+
+primary: #16a34a
+primaryHover: #15803d
+secondary: #ca8a04
+slateDark: #1e293b
+bgSoft: #f1f5f9
+textMain: #0f172a
+textLight: #f8fafc
+Páginas/Rotas (MVP)
+
+Público: / (landing), /login, /register, /verify, /reset-password, /reset-password/confirm
+Autenticado: /dashboard, /calculator, /history, /credits, /referrals
+Retornos de pagamento: /payment/success, /payment/failure, /payment/pending
+Autenticação
+
+Login: POST /login (form username/password) → retorna access_token, expires_in, user_info.
+Header autenticado: Authorization: Bearer <token>.
+Usuário atual: GET /me (retorna créditos válidos).
+Registro: POST /register
+Verificação: POST /auth/send-verification-code → POST /auth/verify-account
+Reset de senha: POST /auth/request-password-reset → POST /auth/reset-password
+Cálculo (ICMS no PIS/COFINS)
+
+Endpoint: POST /calcular
+Payload: {"bills":[{"icms_value":105,"issue_date":"2025-06"}, ...]} (até 12)
+Resposta: {"valor_calculado": number, "creditos_restantes": number, "calculation_id": number, "processing_time_ms": number}
+Histórico: GET /historico?limit=&offset=
+Pagamentos (Mercado Pago)
+
+Criar preferência: POST /payments/create-order → { preference_id, init_point }
+Redirecionar usuário para init_point.
+Webhook backend credita automaticamente (idempotente).
+Páginas de retorno: /payment/success|failure|pending (somente UI; status real via webhook).
+Regras/Validações (Frontend)
+
+issue_date sempre YYYY-MM.
+Até 12 faturas; erro amigável se exceder.
+Mostrar saldo de créditos após login//me.
+Em /calculator: uso de React Hook Form + Zod (tipos claros) + feedback de erro.
+Estado & HTTP
+
+React Query (cache, loading, error).
+Axios com interceptor para Authorization.
+Tratamento de 401: redirecionar login e limpar sessão.
+Acessibilidade/UX
+
+Contraste com slateDark/textLight em cabeçalhos/rodapés.
+Estados de foco/hover (primaryHover).
+Mensagens de erro acessíveis (aria-live).
+Componentes Base
+
+Button (variants: primary, secondary, subtle; loading).
+Input (label, helper, error).
+Card (header, body).
+Badge (para status de pagamento).
+Alert (success/error/info).
+Skeleton (loading de listas e cards).
+Exemplos de Requisição (resumido)
+
+Login (form URL-encoded): username=<email>&password=<senha>
+Calcular: body JSON acima; header com Bearer.
+Create order: sem body extra (usa pacote padrão de 3 créditos no backend hoje).
+Erros e Mensagens
+
+400/422: mensagens de validação (mostrar toast/inline).
+402 no cálculo: “Créditos insuficientes” (CTA para /credits).
+404 SELIC/IPCA: sugerir tentar novamente mais tarde (dados econômicos ausentes).
+Integração com Domínios
+
+Produção:
+API: https://calculaconfia-production.up.railway.app
+Web: https://calculaconfia-web.up.railway.app (ou domínio)
+Ajustar FRONTEND_URL/PUBLIC_BASE_URL no backend conforme domínio final.
+Checklist de Pronto-Para-Deploy
+
+.env.local com NEXT_PUBLIC_API_URL (dev).
+Railway (frontend): NEXT_PUBLIC_API_URL de produção.
+CORS ok (backend permite o domínio do frontend).
+Páginas de retorno do MP publicadas.
+Smoke test: login → /me; /credits → redirect; /calculator → resultado.
