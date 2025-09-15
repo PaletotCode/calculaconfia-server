@@ -33,9 +33,9 @@ class UserResponse(BaseModel):
 # ===== Token Schemas =====
 class Token(BaseModel):
     access_token: str
-    token_type: str
     expires_in: int
     user_info: UserResponse
+    token_type: str = "cookie"
 
 
 class TokenData(BaseModel):

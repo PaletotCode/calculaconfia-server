@@ -10,7 +10,7 @@ from datetime import datetime
 from sqlalchemy import and_
 from ..models_schemas.models import VerificationCode, CreditTransaction, VerificationType
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks, Response
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -86,11 +86,12 @@ async def register(
 @router.post("/login", response_model=Token)
 async def login(
     request: Request,
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Autentica o usuário por email e retorna um token JWT
+    Autentica o usuário por email e grava o token em cookie HTTP-only
     """
     with LogContext(endpoint="login", identifier=form_data.username):
         logger.info("User login request received")
@@ -118,6 +119,17 @@ async def login(
             is_admin=user.is_admin,
             created_at=user.created_at
         )
+
+        # Gravar token em cookie HTTP-only
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,
+            max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            expires=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            secure=settings.ENVIRONMENT == "production",
+            samesite="none" if settings.ENVIRONMENT == "production" else "lax",
+        )
         
         return Token(
             access_token=access_token,
@@ -125,6 +137,12 @@ async def login(
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             user_info=user_info
         )
+    
+@router.post("/logout")
+async def logout(response: Response):
+    """Remove token do cookie"""
+    response.delete_cookie("access_token")
+    return {"message": "Logged out"}
 
 
 # ===== NOVOS ENDPOINTS DE VERIFICAÇÃO E SENHA =====

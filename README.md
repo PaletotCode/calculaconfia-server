@@ -104,7 +104,7 @@ Principais: `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BAC
 - Autopagamento bloqueado se `MERCADO_PAGO_SELLER_EMAIL` == e-mail do pagador.
 
 ## Endpoints (APIs)
-Autenticação: JWT Bearer no header `Authorization: Bearer <TOKEN>` quando indicado.
+Autenticação: JWT armazenado em cookie HTTP-only `access_token`.
 
 - POST `/api/v1/register` (público)
   ```json
@@ -127,7 +127,7 @@ Autenticação: JWT Bearer no header `Authorization: Bearer <TOKEN>` quando indi
   { "email": "user@example.com", "code": "123456" }
   ```
 
-- POST `/api/v1/login` (público; form)
+  - POST `/api/v1/login` (público; form; gera cookie `access_token`)
   - `username=<email>&password=<senha>`
 
 - GET `/api/v1/me` (auth)

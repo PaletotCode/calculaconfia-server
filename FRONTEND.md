@@ -7,7 +7,7 @@ Stack sugerida
 - Next.js (App Router) + TypeScript
 - State: React Query ou SWR
 - UI: TailwindCSS ou Lib de sua preferência
-- Autenticação: JWT Bearer armazenado em `localStorage`/`secure storage` (usar HTTPS em produção)
+- Autenticação: JWT em cookie HTTP-only (usar `credentials: 'include'` e HTTPS em produção)
 - Integração com Mercado Pago: redirecionar para `init_point` (Checkout Pro)
 
 SDK Mercado Pago (Frontend JS v2) — obrigatório
@@ -86,7 +86,7 @@ Fluxos
 
 3) Login
    - POST `/api/v1/login` (form) com username=email, password.
-   - Salvar o token (e.g. localStorage). Definir Authorization em todas as requisições seguintes.
+   - Backend grava cookie HTTP-only `access_token`; enviar requisições com `credentials: 'include'`.
 
 4) Dashboard
    - GET `/api/v1/me` — exibir créditos atuais e, após a primeira compra, `referral_code`.
@@ -118,12 +118,7 @@ HTTP Client (exemplo)
 const API = process.env.NEXT_PUBLIC_API_BASE_URL!;
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = localStorage.getItem('token');
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-  const res = await fetch(`${API}${path}`, { ...options, headers });
+  const res = await fetch(`${API}${path}`, { ...options, credentials: 'include' });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -140,11 +135,10 @@ async function login(email: string, password: string) {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
+    credentials: 'include',
   });
   if (!res.ok) throw new Error(await res.text());
-  const data = await res.json();
-  localStorage.setItem('token', data.access_token);
-  return data;
+  return res.json();
 }
 ```
 
