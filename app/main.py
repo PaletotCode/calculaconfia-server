@@ -18,6 +18,50 @@ from .core.config import settings
 configure_logging()
 logger = get_logger(__name__)
 
+def _parse_cors_origins(*values: str | None) -> list[str]:
+    """Normaliza listas de domínios separados por vírgula."""
+    origins: list[str] = []
+    for value in values:
+        if not value:
+            continue
+
+        for origin in value.split(","):
+            cleaned = origin.strip().strip('"').strip("'")
+            if cleaned:
+                origins.append(cleaned)
+
+    # Remove duplicados preservando a ordem
+    return list(dict.fromkeys(origins))
+
+
+def _parse_allowed_hosts(*values: str | None) -> list[str]:
+    """Normaliza lista de hosts aceitos pelo TrustedHostMiddleware."""
+    hosts: list[str] = []
+    for value in values:
+        if not value:
+            continue
+
+        for raw_host in value.split(","):
+            host_candidate = raw_host.strip().strip('"').strip("'")
+            if not host_candidate:
+                continue
+
+            if host_candidate.startswith("http://") or host_candidate.startswith("https://"):
+                parsed = urlparse(host_candidate)
+                host_candidate = parsed.netloc or parsed.path
+
+            host_candidate = host_candidate.lstrip("/").rstrip("/")
+
+            if host_candidate:
+                hosts.append(host_candidate)
+
+    # Remove duplicados preservando a ordem
+    deduped_hosts: list[str] = []
+    for host in hosts:
+        if host not in deduped_hosts:
+            deduped_hosts.append(host)
+
+    return deduped_hosts
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -190,49 +234,6 @@ async def logging_middleware(request: Request, call_next):
 
 
 # Configuração do CORS
-def _parse_cors_origins(*values: str | None) -> list[str]:
-    """Normaliza listas de domínios separados por vírgula."""
-    origins: list[str] = []
-    for value in values:
-        if not value:
-            continue
-
-        for origin in value.split(","):
-            cleaned = origin.strip().strip('"').strip("'")
-            if cleaned:
-                origins.append(cleaned)
-
-    # Remove duplicados preservando a ordem
-    return list(dict.fromkeys(origins))
-
-def _parse_allowed_hosts(*values: str | None) -> list[str]:
-    """Normaliza lista de hosts aceitos pelo TrustedHostMiddleware."""
-    hosts: list[str] = []
-    for value in values:
-        if not value:
-            continue
-
-        for raw_host in value.split(","):
-            host_candidate = raw_host.strip().strip('"').strip("'")
-            if not host_candidate:
-                continue
-
-            if host_candidate.startswith("http://") or host_candidate.startswith("https://"):
-                parsed = urlparse(host_candidate)
-                host_candidate = parsed.netloc or parsed.path
-
-            host_candidate = host_candidate.lstrip("/").rstrip("/")
-
-            if host_candidate:
-                hosts.append(host_candidate)
-
-    # Remove duplicados preservando a ordem
-    deduped_hosts: list[str] = []
-    for host in hosts:
-        if host not in deduped_hosts:
-            deduped_hosts.append(host)
-
-    return deduped_hosts
 
 cors_origins_prod = []
 if settings.ENVIRONMENT == "production":
