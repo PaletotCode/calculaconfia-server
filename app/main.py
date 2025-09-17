@@ -186,11 +186,35 @@ async def logging_middleware(request: Request, call_next):
 
 
 # Configuração do CORS
+def _parse_cors_origins(*values: str) -> list[str]:
+    """Normaliza listas de domínios separados por vírgula."""
+    origins: list[str] = []
+    for value in values:
+        if not value:
+            continue
+
+        for origin in value.split(","):
+            cleaned = origin.strip().strip('"').strip("'")
+            if cleaned:
+                origins.append(cleaned)
+
+    # Remove duplicados preservando a ordem
+    return list(dict.fromkeys(origins))
+
+
 cors_origins_prod = []
 if settings.ENVIRONMENT == "production":
-    # Deriva do FRONTEND_URL e domínios calculaconfia
-    fe = os.getenv("FRONTEND_URL") or "https://calculaconfia.com.br"
-    cors_origins_prod = [fe, "https://calculaconfia.com.br", "https://*.calculaconfia.com.br"]
+    # Deriva do FRONTEND_URL e domínios adicionais configurados via env
+    cors_origins_prod = _parse_cors_origins(
+        os.getenv("FRONTEND_URL"),
+        os.getenv("EXTRA_CORS_ORIGINS"),
+    )
+
+    if not cors_origins_prod:
+        cors_origins_prod = [
+            "https://calculaconfia.com.br",
+            "https://www.calculaconfia.com.br",
+        ]
 
 app.add_middleware(
     CORSMiddleware,
