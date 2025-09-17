@@ -121,15 +121,20 @@ async def login(
         )
 
         # Gravar token em cookie HTTP-only
-        response.set_cookie(
-            key="access_token",
-            value=access_token,
-            httponly=True,
-            max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            expires=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            secure=settings.ENVIRONMENT == "production",
-            samesite="none" if settings.ENVIRONMENT == "production" else "lax",
-        )
+        cookie_kwargs = {
+            "key": "access_token",
+            "value": access_token,
+            "httponly": True,
+            "max_age": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "expires": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "secure": settings.ENVIRONMENT == "production",
+            "samesite": "none" if settings.ENVIRONMENT == "production" else "lax",
+        }
+
+        if settings.COOKIE_DOMAIN:
+            cookie_kwargs["domain"] = settings.COOKIE_DOMAIN
+
+        response.set_cookie(**cookie_kwargs)
         
         return Token(
             access_token=access_token,
