@@ -46,6 +46,7 @@ Observação: fluxo é email‑only (telefone removido).
 - PUBLIC_BASE_URL=https://<seu-domínio-ou-ngrok>
 - FRONTEND_URL=http://localhost:3000
 - MERCADO_PAGO_SELLER_EMAIL=<opcional para evitar autopagamento>
+- ALLOWED_HOSTS=api.calculaconfia.com.br,novo-subdominio.calculaconfia.com.br
 
 2) Subir
 ```
@@ -71,10 +72,10 @@ docker compose up -d celery_worker celery_beat redis_insight
 curl http://localhost:8000/api/v1/health
 ```
 
-Importante: `PUBLIC_BASE_URL` deve estar correto ANTES de criar uma ordem (preferência usa o valor atual). Mudou o ngrok? Crie nova ordem.
+Importante: `PUBLIC_BASE_URL` deve estar correto ANTES de criar uma ordem (preferência usa o valor atual). Mudou o ngrok ou o domínio? Atualize também `FRONTEND_URL` e `ALLOWED_HOSTS` e crie nova ordem.
 
 ## Variáveis de Ambiente
-Principais: `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `SECRET_KEY`, `ENVIRONMENT`, `SENDGRID_API_KEY`, `MAIL_FROM`, `MAIL_FROM_NAME`, `MERCADO_PAGO_ACCESS_TOKEN`, `MERCADO_PAGO_WEBHOOK_SECRET` (opcional), `MERCADO_PAGO_SELLER_EMAIL` (opcional), `PUBLIC_BASE_URL`, `FRONTEND_URL`.
+Principais: `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, `SECRET_KEY`, `ENVIRONMENT`, `SENDGRID_API_KEY`, `MAIL_FROM`, `MAIL_FROM_NAME`, `MERCADO_PAGO_ACCESS_TOKEN`, `MERCADO_PAGO_WEBHOOK_SECRET` (opcional), `MERCADO_PAGO_SELLER_EMAIL` (opcional), `PUBLIC_BASE_URL`, `FRONTEND_URL`, `ALLOWED_HOSTS`.
 
 ## Logs e Observabilidade
 - Todos: `docker compose logs -f`
@@ -164,6 +165,7 @@ Autenticação: JWT armazenado em cookie HTTP-only `access_token`.
 - Produção sugerida:
   - API: `https://api.calculaconfia.com.br`
   - FRONTEND_URL: `https://calculaconfia.com.br`
+  - ALLOWED_HOSTS: `api.calculaconfia.com.br,novo-subdominio.calculaconfia.com.br`
   - Webhook no MP: `https://api.calculaconfia.com.br/api/v1/payments/webhook`
 
 Para diretrizes do frontend, consulte `FRONTEND.md`.

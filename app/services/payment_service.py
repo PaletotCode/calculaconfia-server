@@ -1,4 +1,3 @@
-import os
 import mercadopago
 from fastapi import Request, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,12 +6,49 @@ from ..core.config import settings
 from ..core.logging_config import get_logger
 from ..models_schemas.models import User
 from .credit_service import CreditService
+from urllib.parse import urlparse
 
 logger = get_logger(__name__)
 
 # --------------------------------------------------------------------------------
 # --- Controle F: INÍCIO - payment_service.py
 # --------------------------------------------------------------------------------
+
+def _normalize_base_url(value: str | None, env_name: str) -> str:
+    """Normaliza URLs base removendo barras finais e caminhos extras."""
+    if not value or not value.strip():
+        logger.error(
+            "Variável de ambiente obrigatória não configurada.",
+            env_var=env_name,
+        )
+        raise ValueError(f"Variável de ambiente {env_name} não configurada.")
+
+    cleaned = value.strip().strip('"').strip("'")
+    parsed = urlparse(cleaned)
+
+    if not parsed.scheme or not parsed.netloc:
+        candidate = cleaned
+        if "//" not in candidate:
+            candidate = f"https://{candidate}"
+        parsed = urlparse(candidate)
+
+    if not parsed.scheme or not parsed.netloc:
+        logger.error(
+            "Valor inválido para variável de ambiente de URL.",
+            env_var=env_name,
+            value=cleaned,
+        )
+        raise ValueError(f"Valor inválido configurado em {env_name}.")
+
+    if parsed.path and parsed.path not in ("", "/"):
+        logger.warning(
+            "Valor de URL contém caminho adicional; ignorando caminho informado.",
+            env_var=env_name,
+            path=parsed.path,
+        )
+
+    normalized = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    return normalized
 
 # Inicializa o SDK do Mercado Pago
 # Garante que a chave de acesso não seja nula ou vazia
@@ -31,13 +67,9 @@ def create_payment_preference(user: User, item_details: dict):
     if not sdk:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Sistema de pagamento indisponível.")
 
-    public_base_url = os.getenv("PUBLIC_BASE_URL")
-    frontend_url = os.getenv("FRONTEND_URL")
-    seller_email = os.getenv("MERCADO_PAGO_SELLER_EMAIL")
-
-    if not public_base_url or not frontend_url:
-        logger.error("PUBLIC_BASE_URL e FRONTEND_URL não estão configuradas no ambiente.")
-        raise ValueError("Variáveis de ambiente de URL necessárias não foram configuradas.")
+    public_base_url = _normalize_base_url(settings.PUBLIC_BASE_URL, "PUBLIC_BASE_URL")
+    frontend_url = _normalize_base_url(settings.FRONTEND_URL, "FRONTEND_URL")
+    seller_email = settings.MERCADO_PAGO_SELLER_EMAIL
 
     # --- INÍCIO DA CORREÇÃO DE DADOS DO PAGADOR ---
     # Garante que nome e sobrenome não sejam nulos para o Mercado Pago

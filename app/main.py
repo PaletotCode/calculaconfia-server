@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 import time
 import uuid
+from urllib.parse import urlparse
 
 from .api.endpoints import router
 from .core.database import init_cache, close_cache, engine
@@ -62,8 +63,6 @@ app = FastAPI(
 
 # ===== MIDDLEWARE DE SEGURANÇA =====
 
-
-
 if settings.ENVIRONMENT == "production":
     # HTTPS obrigatório em produção (pode ser desativado quando atrás de proxy)
     enable_https_redirect = os.getenv("ENABLE_HTTPS_REDIRECT", "true").lower() == "true"
@@ -71,22 +70,27 @@ if settings.ENVIRONMENT == "production":
         from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
         app.add_middleware(HTTPSRedirectMiddleware)
 
-    # Domínios confiáveis (configuráveis via env ALLOWED_HOSTS, separados por vírgula)
-    allowed_hosts_env = os.getenv("ALLOWED_HOSTS")
-    if allowed_hosts_env:
-        # Suporta valores com aspas e separados por vírgula
-        allowed_hosts = [
-            h.strip().strip('"').strip("'")
-            for h in allowed_hosts_env.split(",")
-            if h.strip()
-        ]
-    else:
+    # Domínios confiáveis (configuráveis via env ALLOWED_HOSTS)
+    allowed_hosts = _parse_allowed_hosts(settings.ALLOWED_HOSTS)
+
+    # Garante que o domínio público da API também esteja liberado
+    public_base_hosts = _parse_allowed_hosts(settings.PUBLIC_BASE_URL)
+    for host in public_base_hosts:
+        if host not in allowed_hosts:
+            allowed_hosts.append(host)
+
+    if not allowed_hosts:
         allowed_hosts = [
             "calculaconfia.com.br",
             "*.calculaconfia.com.br",
             "api.calculaconfia.com.br",
         ]
 
+    logger.info(
+        "TrustedHostMiddleware configurado",
+        allowed_hosts=allowed_hosts
+    )
+    
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=allowed_hosts
@@ -186,7 +190,7 @@ async def logging_middleware(request: Request, call_next):
 
 
 # Configuração do CORS
-def _parse_cors_origins(*values: str) -> list[str]:
+def _parse_cors_origins(*values: str | None) -> list[str]:
     """Normaliza listas de domínios separados por vírgula."""
     origins: list[str] = []
     for value in values:
@@ -201,13 +205,41 @@ def _parse_cors_origins(*values: str) -> list[str]:
     # Remove duplicados preservando a ordem
     return list(dict.fromkeys(origins))
 
+def _parse_allowed_hosts(*values: str | None) -> list[str]:
+    """Normaliza lista de hosts aceitos pelo TrustedHostMiddleware."""
+    hosts: list[str] = []
+    for value in values:
+        if not value:
+            continue
+
+        for raw_host in value.split(","):
+            host_candidate = raw_host.strip().strip('"').strip("'")
+            if not host_candidate:
+                continue
+
+            if host_candidate.startswith("http://") or host_candidate.startswith("https://"):
+                parsed = urlparse(host_candidate)
+                host_candidate = parsed.netloc or parsed.path
+
+            host_candidate = host_candidate.lstrip("/").rstrip("/")
+
+            if host_candidate:
+                hosts.append(host_candidate)
+
+    # Remove duplicados preservando a ordem
+    deduped_hosts: list[str] = []
+    for host in hosts:
+        if host not in deduped_hosts:
+            deduped_hosts.append(host)
+
+    return deduped_hosts
 
 cors_origins_prod = []
 if settings.ENVIRONMENT == "production":
     # Deriva do FRONTEND_URL e domínios adicionais configurados via env
     cors_origins_prod = _parse_cors_origins(
-        os.getenv("FRONTEND_URL"),
-        os.getenv("EXTRA_CORS_ORIGINS"),
+        settings.FRONTEND_URL,
+        settings.EXTRA_CORS_ORIGINS,
     )
 
     if not cors_origins_prod:
