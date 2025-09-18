@@ -127,6 +127,8 @@ def create_payment_preference(user: User, item_details: dict):
             "failure": f"{frontend_url.rstrip('/')}/payment/failure",
             "pending": f"{frontend_url.rstrip('/')}/payment/pending",
         },
+        "auto_return": "approved",
+        "binary_mode": True,
         "external_reference": str(user.id),
         "metadata": {
             "user_id": user.id,
