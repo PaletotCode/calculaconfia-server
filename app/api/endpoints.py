@@ -40,7 +40,7 @@ from ..models_schemas.schemas import (
     RequestPasswordResetRequest,
     ResetPasswordRequest,
     VerificationCodeResponse,
-    ReferralStatsResponse
+    ReferralStatsResponse,
 )
 from pydantic import BaseModel
 from ..services.main_service import (
@@ -51,6 +51,21 @@ from ..services.main_service import (
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+class PaymentConfirmationRequest(BaseModel):
+    payment_id: str
+    status: Optional[str] = None
+    preference_id: Optional[str] = None
+
+
+class PaymentConfirmationResponse(BaseModel):
+    payment_id: str
+    status: Optional[str] = None
+    credits_added: bool
+    already_processed: bool
+    credits_balance: Optional[int] = None
+    detail: Optional[str] = None
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -340,7 +355,7 @@ async def historico(
 
 
 @router.get("/me", response_model=UserResponse)
-@cache(expire=60)  # Cache por 1 minuto
+@cache(expire=60, namespace="user_me")  # Cache por 1 minuto
 async def get_current_user_info(
     current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db)
@@ -825,6 +840,45 @@ async def create_payment_order(current_user: User = Depends(get_current_active_u
     except Exception as e:
         logger.error("Falha ao criar ordem de pagamento.", error=str(e), user_id=current_user.id)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Não foi possível iniciar o pagamento.")
+
+
+@router.post("/payments/confirm", response_model=PaymentConfirmationResponse)
+async def confirm_payment_status(
+    payload: PaymentConfirmationRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Permite que o frontend valide e sincronize imediatamente um pagamento retornado pelo Checkout Pro."""
+    payment_id = payload.payment_id.strip()
+    if not payment_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="payment_id é obrigatório",
+        )
+
+    result = await payment_service.process_payment_and_award(
+        payment_id=payment_id,
+        db=db,
+        expected_user_id=current_user.id,
+    )
+
+    if result.detail == "unexpected_user":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Pagamento não pertence ao usuário autenticado",
+        )
+
+    # Se o pagamento ainda estiver pendente, apenas informamos o status ao frontend.
+    credits_balance = await CalculationService._get_valid_credits_balance(db, current_user.id)
+
+    return PaymentConfirmationResponse(
+        payment_id=result.payment_id,
+        status=result.status,
+        credits_added=result.processed,
+        already_processed=result.already_processed,
+        credits_balance=credits_balance,
+        detail=result.detail or payload.status,
+    )
 
 
 @router.post("/payments/webhook", status_code=status.HTTP_200_OK)

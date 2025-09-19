@@ -12,6 +12,16 @@ logger = get_logger(__name__)
 class CreditService:
 
     @staticmethod
+    async def has_processed_payment(db: AsyncSession, payment_id: str) -> bool:
+        """Retorna True se já existe transação vinculada ao pagamento informado."""
+        result = await db.execute(
+            select(CreditTransaction).where(
+                CreditTransaction.reference_id == f"mp_{payment_id}"
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
+    @staticmethod
     async def add_credits_from_purchase(db: AsyncSession, user_id: int, amount: int, payment_id: str):
         """
         Adiciona créditos, gera o código de referência na primeira compra e lida com bônus.
@@ -23,10 +33,7 @@ class CreditService:
                 logger.error(f"Usuário {user_id} não encontrado para adicionar créditos.")
                 return
 
-            existing_transaction = await db.execute(
-                select(CreditTransaction).where(CreditTransaction.reference_id == f"mp_{payment_id}")
-            )
-            if existing_transaction.scalar_one_or_none():
+            if await CreditService.has_processed_payment(db, payment_id):
                 logger.warning(f"Transação {payment_id} já processada. Ignorando.")
                 return
 

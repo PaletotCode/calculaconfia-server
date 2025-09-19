@@ -1,5 +1,10 @@
+import re
+from dataclasses import dataclass
+from typing import Any, Optional
+
 import mercadopago
-from fastapi import Request, HTTPException, status
+from fastapi import HTTPException, Request, status
+from fastapi_cache import FastAPICache
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import settings
@@ -13,6 +18,238 @@ logger = get_logger(__name__)
 # --------------------------------------------------------------------------------
 # --- Controle F: INÍCIO - payment_service.py
 # --------------------------------------------------------------------------------
+
+
+def _extract_credits_from_items(items: Optional[list[dict[str, Any]]]) -> Optional[int]:
+    """Extrai quantidade total de créditos a partir da lista de itens retornados pelo MP."""
+    if not items:
+        return None
+
+    total = 0
+    found = False
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key in ("id", "title", "description"):
+            raw_value = item.get(key)
+            if not isinstance(raw_value, str):
+                continue
+            match = re.search(r"(\d+)", raw_value)
+            if match:
+                credits = int(match.group(1))
+                if credits > 0:
+                    total += credits
+                    found = True
+                    break
+
+    return total if found else None
+
+
+def _resolve_credits_from_order(payment_info: dict[str, Any]) -> Optional[int]:
+    """Tenta identificar a quantidade de créditos consultando a merchant_order vinculada."""
+    if not sdk:
+        return None
+
+    order = payment_info.get("order") or {}
+    merchant_order_id = order.get("id") if isinstance(order, dict) else None
+    if not merchant_order_id:
+        return None
+
+    try:
+        response = sdk.merchant_order().find_by_id(merchant_order_id)
+        merchant_order = response.get("response") or {}
+        items = merchant_order.get("items") or []
+        return _extract_credits_from_items(items)
+    except Exception as exc:  # pragma: no cover - apenas log de diagnóstico
+        logger.warning(
+            "Falha ao consultar merchant_order vinculada ao pagamento.",
+            merchant_order_id=merchant_order_id,
+            error=str(exc),
+        )
+        return None
+
+
+@dataclass
+class PaymentProcessingResult:
+    payment_id: str
+    status: Optional[str]
+    user_id: Optional[int]
+    credits_amount: Optional[int]
+    processed: bool
+    already_processed: bool
+    detail: Optional[str] = None
+
+
+async def process_payment_and_award(
+    payment_id: str,
+    db: AsyncSession,
+    expected_user_id: Optional[int] = None,
+) -> PaymentProcessingResult:
+    """Consulta o pagamento no Mercado Pago e garante que os créditos do usuário sejam liberados."""
+    if not sdk:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Sistema de pagamento indisponível.",
+        )
+
+    try:
+        payment_response = sdk.payment().get(payment_id)
+    except Exception as exc:  # pragma: no cover - dependência externa
+        logger.error(
+            "Erro ao consultar pagamento no Mercado Pago.",
+            payment_id=payment_id,
+            error=str(exc),
+        )
+        raise
+
+    payment_info = payment_response.get("response") if isinstance(payment_response, dict) else None
+    if not payment_info:
+        logger.error(
+            "Resposta inválida ao tentar obter informações do pagamento.",
+            payment_id=payment_id,
+            response=payment_response,
+        )
+        return PaymentProcessingResult(
+            payment_id=payment_id,
+            status=None,
+            user_id=None,
+            credits_amount=None,
+            processed=False,
+            already_processed=False,
+            detail="payment_not_found",
+        )
+
+    status_pagamento = payment_info.get("status")
+    external_reference = payment_info.get("external_reference")
+    user_id = int(external_reference) if external_reference is not None else None
+    metadata = payment_info.get("metadata") or {}
+    credits_to_add = metadata.get("credits_amount")
+
+    if credits_to_add is None:
+        credits_to_add = _resolve_credits_from_order(payment_info)
+
+    if status_pagamento != "approved":
+        logger.info(
+            "Pagamento não está aprovado no Mercado Pago.",
+            payment_id=payment_id,
+            status=status_pagamento,
+        )
+        return PaymentProcessingResult(
+            payment_id=payment_id,
+            status=status_pagamento,
+            user_id=user_id,
+            credits_amount=None,
+            processed=False,
+            already_processed=False,
+            detail="payment_not_approved",
+        )
+
+    if expected_user_id is not None and user_id is not None and user_id != expected_user_id:
+        logger.warning(
+            "Pagamento aprovado pertence a outro usuário.",
+            payment_id=payment_id,
+            user_id=user_id,
+            expected_user_id=expected_user_id,
+        )
+        return PaymentProcessingResult(
+            payment_id=payment_id,
+            status=status_pagamento,
+            user_id=user_id,
+            credits_amount=None,
+            processed=False,
+            already_processed=False,
+            detail="unexpected_user",
+        )
+
+    if not user_id:
+        logger.error(
+            "Pagamento aprovado sem external_reference (user_id).",
+            payment_id=payment_id,
+        )
+        return PaymentProcessingResult(
+            payment_id=payment_id,
+            status=status_pagamento,
+            user_id=None,
+            credits_amount=None,
+            processed=False,
+            already_processed=False,
+            detail="missing_external_reference",
+        )
+
+    if credits_to_add is None:
+        logger.error(
+            "Pagamento aprovado, mas não foi possível determinar os créditos.",
+            payment_id=payment_id,
+        )
+        return PaymentProcessingResult(
+            payment_id=payment_id,
+            status=status_pagamento,
+            user_id=user_id,
+            credits_amount=None,
+            processed=False,
+            already_processed=False,
+            detail="missing_credits_amount",
+        )
+
+    credits_int = int(credits_to_add)
+    already_processed = await CreditService.has_processed_payment(db, payment_id)
+
+    if already_processed:
+        logger.info(
+            "Pagamento já havia sido processado anteriormente (idempotente).",
+            payment_id=payment_id,
+            user_id=user_id,
+        )
+        try:
+            await FastAPICache.clear(namespace="user_me")
+        except Exception as exc:  # pragma: no cover - evita falha caso cache não esteja inicializado
+            logger.warning(
+                "Falha ao limpar cache após detectar pagamento já processado.",
+                payment_id=payment_id,
+                error=str(exc),
+            )
+        return PaymentProcessingResult(
+            payment_id=payment_id,
+            status=status_pagamento,
+            user_id=user_id,
+            credits_amount=credits_int,
+            processed=False,
+            already_processed=True,
+            detail="already_processed",
+        )
+
+    await CreditService.add_credits_from_purchase(
+        db=db,
+        user_id=user_id,
+        amount=credits_int,
+        payment_id=str(payment_id),
+    )
+
+    logger.info(
+        "Créditos adicionados ao usuário após confirmação do pagamento.",
+        payment_id=payment_id,
+        user_id=user_id,
+        credits=credits_int,
+    )
+
+    try:
+        await FastAPICache.clear(namespace="user_me")
+    except Exception as exc:  # pragma: no cover - evita derrubar fluxo em caso de indisponibilidade do cache
+        logger.warning(
+            "Falha ao limpar cache após adicionar créditos.",
+            payment_id=payment_id,
+            error=str(exc),
+        )
+
+    return PaymentProcessingResult(
+        payment_id=payment_id,
+        status=status_pagamento,
+        user_id=user_id,
+        credits_amount=credits_int,
+        processed=True,
+        already_processed=False,
+        detail="credits_added",
+    )
 
 def _normalize_base_url(value: str | None, env_name: str) -> str:
     """Normaliza URLs base removendo barras finais e caminhos extras."""
@@ -161,26 +398,7 @@ async def handle_webhook_notification(request: Request, db: AsyncSession):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Sistema de pagamento indisponível.")
 
     # Tenta ler JSON; se falhar, usa query params (formato legado)
-    notification_data = {}
     try:
-        # Helper para extrair a quantidade de créditos a partir dos itens
-        def _extract_credits_from_items(items):
-            import re
-            total = 0
-            found = False
-            for it in items or []:
-                for key in ("id", "title", "description"):
-                    val = it.get(key)
-                    if not isinstance(val, str):
-                        continue
-                    m = re.search(r"(\d+)", val)
-                    if m:
-                        n = int(m.group(1))
-                        if n > 0:
-                            total += n
-                            found = True
-                            break
-            return total if found else None
         notification_data = await request.json()
     except Exception:
         notification_data = {}
@@ -210,51 +428,27 @@ async def handle_webhook_notification(request: Request, db: AsyncSession):
                 logger.warning("Webhook 'payment' sem ID.")
                 return
 
-            # 1. Buscar os detalhes do pagamento
-            logger.info(f"Buscando detalhes do pagamento {payment_id} no Mercado Pago.")
-            payment_info_response = sdk.payment().get(payment_id)
-            payment_info = payment_info_response.get("response")
-
-            if not payment_info:
-                logger.error(f"Não foi possível obter informações do pagamento {payment_id}.")
-                return
-
-            status_pagamento = payment_info.get("status")
-            if status_pagamento != "approved":
+            result = await process_payment_and_award(str(payment_id), db)
+            if result.processed:
                 logger.info(
-                    f"Pagamento {payment_id} não está aprovado. Status: {status_pagamento}. Ignorando.")
-                return
-
-            user_id = payment_info.get("external_reference")
-            metadata = payment_info.get("metadata", {}) or {}
-            credits_to_add = metadata.get("credits_amount")
-
-            # Fallback: tentar extrair pelos itens da merchant_order vinculada
-            if not credits_to_add:
-                try:
-                    order = payment_info.get("order") or {}
-                    mo_id = order.get("id") if isinstance(order, dict) else None
-                    if mo_id:
-                        mo_resp = sdk.merchant_order().find_by_id(mo_id)
-                        mo = mo_resp.get("response") or {}
-                        items = mo.get("items") or []
-                        credits_to_add = _extract_credits_from_items(items)
-                except Exception:
-                    credits_to_add = None
-
-            if not user_id or not credits_to_add:
-                logger.error(
-                    f"Faltando 'external_reference' (user_id) ou não foi possível inferir créditos no pagamento {payment_id}.")
-                return
-
-            await CreditService.add_credits_from_purchase(
-                db=db,
-                user_id=int(user_id),
-                amount=int(credits_to_add),
-                payment_id=str(payment_id),
-            )
-            logger.info(
-                f"Créditos adicionados via webhook para pagamento {payment_id} e usuário {user_id}.")
+                    "Créditos adicionados via webhook.",
+                    payment_id=result.payment_id,
+                    user_id=result.user_id,
+                    credits=result.credits_amount,
+                )
+            elif result.detail == "already_processed":
+                logger.info(
+                    "Webhook recebido para pagamento já processado.",
+                    payment_id=result.payment_id,
+                    user_id=result.user_id,
+                )
+            else:
+                logger.info(
+                    "Webhook processado sem inserir créditos (status não aprovado ou dados ausentes).",
+                    payment_id=result.payment_id,
+                    status=result.status,
+                    detail=result.detail,
+                )
 
         elif notif_type == "merchant_order":
             order_id = (
@@ -278,32 +472,24 @@ async def handle_webhook_notification(request: Request, db: AsyncSession):
                 return
 
             # Processa todos pagamentos aprovados (idempotência garantida por CreditService)
-            for p in payments:
-                if (p.get("status") or p.get("status_detail")) and p.get("id"):
-                    pid = p.get("id")
-                    logger.info(f"Verificando pagamento {pid} da merchant_order {order_id}")
-                    pay_resp = sdk.payment().get(pid)
-                    pay = pay_resp.get("response")
-                    if not pay:
-                        continue
-                    if pay.get("status") != "approved":
-                        continue
-                    user_id = pay.get("external_reference")
-                    metadata = pay.get("metadata", {}) or {}
-                    credits_to_add = metadata.get("credits_amount")
-                    if not credits_to_add:
-                        items = order_info.get("items") or []
-                        credits_to_add = _extract_credits_from_items(items)
-                    if not user_id or not credits_to_add:
-                        continue
-                    await CreditService.add_credits_from_purchase(
-                        db=db,
-                        user_id=int(user_id),
-                        amount=int(credits_to_add),
-                        payment_id=str(pid),
-                    )
+            for payment in payments:
+                payment_id = payment.get("id")
+                if not payment_id:
+                    continue
+                result = await process_payment_and_award(str(payment_id), db)
+                if result.processed:
                     logger.info(
-                        f"Créditos adicionados via merchant_order {order_id} pagamento {pid}.")
+                        "Créditos adicionados via merchant_order.",
+                        merchant_order_id=order_id,
+                        payment_id=result.payment_id,
+                        user_id=result.user_id,
+                    )
+                elif result.detail == "already_processed":
+                    logger.info(
+                        "Pagamento da merchant_order já havia sido processado.",
+                        merchant_order_id=order_id,
+                        payment_id=result.payment_id,
+                    )
 
         else:
             logger.info("Tipo de notificação não suportado (ignorado).", type=notif_type)
