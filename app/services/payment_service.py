@@ -45,6 +45,29 @@ def _extract_credits_from_items(items: Optional[list[dict[str, Any]]]) -> Option
     return total if found else None
 
 
+def _fetch_merchant_order(merchant_order_id: Any) -> dict[str, Any]:
+    """Consulta a merchant_order no SDK lidando com diferenças de método entre versões."""
+    if not sdk:
+        return {}
+
+    try:
+        merchant_api = sdk.merchant_order()
+        fetch_method = getattr(merchant_api, "get", None) or getattr(merchant_api, "find_by_id", None)
+        if not callable(fetch_method):
+            raise AttributeError("Mercado Pago SDK merchant_order client lacks fetch method")
+
+        response = fetch_method(merchant_order_id)
+        if isinstance(response, dict):
+            return response.get("response") or {}
+    except Exception as exc:  # pragma: no cover - integrações externas
+        logger.warning(
+            "Falha ao consultar merchant_order vinculada ao pagamento.",
+            merchant_order_id=merchant_order_id,
+            error=str(exc),
+        )
+    return {}
+
+
 def _resolve_credits_from_order(payment_info: dict[str, Any]) -> Optional[int]:
     """Tenta identificar a quantidade de créditos consultando a merchant_order vinculada."""
     if not sdk:
@@ -55,18 +78,12 @@ def _resolve_credits_from_order(payment_info: dict[str, Any]) -> Optional[int]:
     if not merchant_order_id:
         return None
 
-    try:
-        response = sdk.merchant_order().find_by_id(merchant_order_id)
-        merchant_order = response.get("response") or {}
-        items = merchant_order.get("items") or []
-        return _extract_credits_from_items(items)
-    except Exception as exc:  # pragma: no cover - apenas log de diagnóstico
-        logger.warning(
-            "Falha ao consultar merchant_order vinculada ao pagamento.",
-            merchant_order_id=merchant_order_id,
-            error=str(exc),
-        )
+    merchant_order = _fetch_merchant_order(merchant_order_id)
+    if not merchant_order:
         return None
+
+    items = merchant_order.get("items") or []
+    return _extract_credits_from_items(items)
 
 
 @dataclass
@@ -460,13 +477,12 @@ async def handle_webhook_notification(request: Request, db: AsyncSession):
                 return
 
             logger.info(f"Buscando merchant_order {order_id} no Mercado Pago.")
-            order_info_resp = sdk.merchant_order().find_by_id(order_id)
-            order_info = order_info_resp.get("response")
+            order_info = _fetch_merchant_order(order_id)
             if not order_info:
                 logger.error(f"Não foi possível obter merchant_order {order_id}.")
                 return
 
-            payments = order_info.get("payments", []) or []
+            payments = order_info.get("payments") or []
             if not payments:
                 logger.info(f"merchant_order {order_id} sem pagamentos associados.")
                 return

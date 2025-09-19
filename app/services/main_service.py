@@ -123,14 +123,10 @@ class UserService:
 
                     db.add(db_user)
 
-                    # Envia o código de verificação por email
-                    if not db_user.email:
-                        raise HTTPException(status_code=400, detail="O e-mail é obrigatório para o cadastro.")
-
                     verification_code = UserService._generate_verification_code()
                     expires_at = datetime.utcnow() + timedelta(minutes=10)
                     verification_record = VerificationCode(
-                        identifier=db_user.email,
+                        identifier=user_data.email,
                         code=verification_code,
                         expires_at=expires_at,
                         type=VerificationType.EMAIL
@@ -140,18 +136,15 @@ class UserService:
                     await db.commit()
                     await db.refresh(db_user)
 
-                    # Tenta enviar o e-mail de verificação, mas não falha o registro se houver
-                    # algum problema de infraestrutura (ex: broker do Celery indisponível).
                     try:
                         send_verification_email(db_user.email, verification_code)
                     except Exception as e:
-                        # Apenas registra o erro; o usuário é criado normalmente.
                         logger.error(
                             "Failed to queue verification email",
                             error=str(e)
                         )
 
-                    send_verification_email(db_user.email, verification_code)
+                    logger.info("User registered; verification email queued", user_id=db_user.id)
 
                     return db_user
 
