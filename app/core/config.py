@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     #Mercado pago
     MERCADO_PAGO_ACCESS_TOKEN: Optional[str] = None
     MERCADO_PAGO_SELLER_EMAIL: Optional[str] = None
+    MERCADO_PAGO_PIX_EXPIRATION_MINUTES: int = 30
     
     # Email Configuration (VALORES PADRÃO PARA DESENVOLVIMENTO)
     MAIL_USERNAME: str = "paletot.business@gmail.com"

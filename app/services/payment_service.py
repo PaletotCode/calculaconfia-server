@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 from typing import Any, Optional
+from datetime import datetime, timedelta  # ADICIONE ESTA LINHA
 
 import mercadopago
 from fastapi import HTTPException, Request, status
@@ -382,6 +383,8 @@ def create_payment_preference(user: User, item_details: dict):
             "pending": f"{frontend_url.rstrip('/')}/payment/pending",
         },
         "auto_return": "approved",
+        "expires": True,
+        "expiration_date_to": (datetime.utcnow() + timedelta(minutes=settings.MERCADO_PAGO_PIX_EXPIRATION_MINUTES)).isoformat(timespec="milliseconds") + "Z",
         "binary_mode": True,
         "external_reference": str(user.id),
         "metadata": {
