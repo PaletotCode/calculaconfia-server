@@ -627,26 +627,28 @@ class CalculationService:
 
                 # Transação atômica para registrar histórico e consumir crédito
                 async with db.begin_nested():
-                    # Atualizar crédito do usuário (campo legacy)
-                    await db.refresh(user)
-                    old_credits = user.credits
-                    user.credits = max(0, user.credits - 1)
-
-                    # Registrar transação de uso de crédito
-                    credit_transaction = CreditTransaction(
+                    balance_before_usage = await CalculationService._get_valid_credits_balance(db, user.id)
+                    if balance_before_usage <= 0:
+                        raise HTTPException(
+                            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                            detail="Insufficient valid credits"
+                        )
+                
+                    # Registrar transacao de uso de credito
+                    usage_transaction = CreditTransaction(
                         user_id=user.id,
                         transaction_type="usage",
                         amount=-1,
-                        balance_before=old_credits,
-                        balance_after=user.credits,
-                        description="Cálculo detalhado de ICMS",
-                        reference_id=None  # Será preenchido após criar histórico
+                        balance_before=balance_before_usage,
+                        balance_after=balance_before_usage - 1,
+                        description="Calculo detalhado de ICMS",
+                        reference_id=None
                     )
-                    db.add(credit_transaction)
-                    
-                    # Salvar histórico
+                    db.add(usage_transaction)
+                
+                    # Salvar historico
                     ip_address, user_agent = AuditService.extract_client_info(request) if request else (None, None)
-                    
+                
                     history_record = QueryHistory(
                         user_id=user.id,
                         icms_value=sum(provided_bills.values()) / len(provided_bills),
@@ -657,15 +659,13 @@ class CalculationService:
                         user_agent=user_agent
                     )
                     db.add(history_record)
-                    await db.flush()  # Para obter o ID
-                    
-                    credit_transaction.reference_id = f"calc_{history_record.id}"
-                    
-                    # Processar bônus de referência se aplicável
-                    await CalculationService._process_referral_bonus(db, user)
-                    
+                    await db.flush()
+                
+                    usage_transaction.reference_id = f"calc_{history_record.id}"
+                
+                    user.credits = max(0, balance_before_usage - 1)
+                
                     await db.commit()
-
                 # Calcular saldo atualizado de créditos válidos
                 valid_credits_remaining = await CalculationService._get_valid_credits_balance(db, user.id)
 
@@ -689,99 +689,6 @@ class CalculationService:
                 logger.error("Falha no processamento do cálculo detalhado", error=str(e), user_id=user.id)
                 raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Erro ao processar o cálculo.")
     
-    @staticmethod
-    async def _process_referral_bonus(db: AsyncSession, user: User):
-        """
-        Processa bônus de referência após pagamento bem-sucedido
-        """
-        try:
-            if not user.referred_by_id:
-                return  # Usuário não foi referenciado
-            
-            # Buscar o referenciador
-            stmt = select(User).where(User.id == user.referred_by_id)
-            result = await db.execute(stmt)
-            referrer = result.scalar_one_or_none()
-            
-            if not referrer:
-                logger.warning("Referrer not found", referred_by_id=user.referred_by_id)
-                return
-            
-            # Verificar se referrer ainda pode ganhar créditos (máximo 3)
-            if referrer.referral_credits_earned >= 3:
-                logger.info("Referrer already earned maximum credits", referrer_id=referrer.id)
-                return
-            
-            # Adicionar 1 crédito bônus ao referrer
-            old_credits = referrer.credits
-            referrer.credits += 1
-            referrer.referral_credits_earned += 1
-            
-            # Registrar transação de bônus com validade de 60 dias
-            expires_at = datetime.utcnow() + timedelta(days=60)
-            
-            bonus_transaction = CreditTransaction(
-                user_id=referrer.id,
-                transaction_type="referral_bonus",
-                amount=1,
-                balance_before=old_credits,
-                balance_after=referrer.credits,
-                description=f"Referral bonus from user {user.id}",
-                reference_id=f"referral_{user.id}",
-                expires_at=expires_at
-            )
-            
-            db.add(bonus_transaction)
-            
-            logger.info("Referral bonus processed", 
-                       referrer_id=referrer.id,
-                       referee_id=user.id,
-                       bonus_amount=1,
-                       total_earned=referrer.referral_credits_earned)
-            
-        except Exception as e:
-            logger.error("Error processing referral bonus", error=str(e))
-            # Não falhar a transação principal por erro no bônus
-
-    @staticmethod
-    async def get_user_history(
-        db: AsyncSession, 
-        user: User,
-        limit: int = 100,
-        offset: int = 0
-    ) -> List[QueryHistory]:
-        """
-        Busca histórico paginado com cache
-        """
-        try:
-            with LogContext(user_id=user.id):
-                logger.info("Fetching user calculation history", 
-                           limit=limit, 
-                           offset=offset)
-                
-                stmt = select(QueryHistory).where(
-                    QueryHistory.user_id == user.id
-                ).order_by(
-                    desc(QueryHistory.created_at)
-                ).limit(limit).offset(offset)
-                
-                result = await db.execute(stmt)
-                history = result.scalars().all()
-                
-                logger.info("History fetched successfully", 
-                           records_count=len(history))
-                
-                return list(history)
-                
-        except Exception as e:
-            logger.error("Error fetching user history", 
-                        error=str(e), 
-                        user_id=user.id)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error retrieving user history"
-            )
-
 
 class AnalyticsService:
     """Serviço para analytics e relatórios"""

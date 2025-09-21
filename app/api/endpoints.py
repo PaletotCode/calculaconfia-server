@@ -119,13 +119,15 @@ async def login(
             expires_delta=access_token_expires
         )
         
+        valid_credits = await CalculationService._get_valid_credits_balance(db, user.id)
+        user.credits = valid_credits
         user_info = UserResponse(
             id=user.id,
             email=user.email,
             first_name=user.first_name,
             last_name=user.last_name,
             referral_code=user.referral_code,
-            credits=user.credits,
+            credits=valid_credits,
             is_verified=user.is_verified,
             is_active=user.is_active,
             is_admin=user.is_admin,
@@ -667,34 +669,33 @@ async def simulate_referral_payment(
     from datetime import datetime, timedelta
     
     try:
-        # Simular "pagamento" dando 3 créditos ao usuário
-        old_credits = current_user.credits
-        current_user.credits += 3
-        
-        # Registrar transação de "compra"
-        expires_at = datetime.utcnow() + timedelta(days=40)
+        balance_before = await CalculationService._get_valid_credits_balance(db, current_user.id)
         purchase_transaction = CreditTransaction(
             user_id=current_user.id,
             transaction_type="purchase",
             amount=3,
-            balance_before=old_credits,
-            balance_after=current_user.credits,
+            balance_before=balance_before,
+            balance_after=balance_before + 3,
             description="Simulated credit purchase",
             reference_id=f"sim_purchase_{current_user.id}_{int(datetime.utcnow().timestamp())}",
-            expires_at=expires_at
+            expires_at=datetime.utcnow() + timedelta(days=40)
         )
         db.add(purchase_transaction)
         
+        await CreditService._refresh_user_legacy_balance(db, current_user)
+        
         # Processar bônus de referência
-        await CalculationService._process_referral_bonus(db, current_user)
+        await CreditService._process_referral_bonus(db, current_user)
         
         await db.commit()
+        
+        new_balance = await CalculationService._get_valid_credits_balance(db, current_user.id)
         
         return {
             "message": "Referral payment simulated successfully",
             "user_id": current_user.id,
             "credits_added": 3,
-            "new_balance": current_user.credits
+            "new_balance": new_balance
         }
         
     except Exception as e:
