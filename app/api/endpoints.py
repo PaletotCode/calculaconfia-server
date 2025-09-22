@@ -68,6 +68,11 @@ class PaymentConfirmationResponse(BaseModel):
     detail: Optional[str] = None
 
 
+class ProcessPixPaymentRequest(BaseModel):
+    preference_id: str
+    idempotency_key: Optional[str] = None
+
+
 class RegistrationResponse(BaseModel):
     message: str
     requires_verification: bool = True
@@ -853,19 +858,37 @@ async def create_payment_order(current_user: User = Depends(get_current_active_u
         item_details = {
             "id": "CREDITS-PACK-3",
             "title": "Pacote Padrão de 3 Créditos",
-            "price":5.00,
-            "credits": 3
+            "price": 5.00,
+            "credits": 3,
         }
-        
+
         preference = payment_service.create_payment_preference(current_user, item_details)
-        # Retorna o ID da preferência e o ponto de inicialização do checkout
+        amount = float(item_details.get("price", 5.0))
+        credits = item_details.get("credits", 3)
+        # Retorna dados utilizados pelo Checkout Transparente
         return {
             "preference_id": preference["id"],
-            "init_point": preference["init_point"]
+            "init_point": preference["init_point"],
+            "amount": amount,
+            "credits": credits,
         }
     except Exception as e:
         logger.error("Falha ao criar ordem de pagamento.", error=str(e), user_id=current_user.id)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Não foi possível iniciar o pagamento.")
+
+
+@router.post("/payments/process", status_code=status.HTTP_201_CREATED)
+async def process_pix_payment(
+    payload: ProcessPixPaymentRequest,
+    current_user: User = Depends(get_current_active_user),
+):
+    payment = payment_service.create_pix_payment(
+        current_user,
+        preference_id=payload.preference_id,
+        idempotency_key=payload.idempotency_key,
+    )
+
+    return payment
 
 
 @router.post("/payments/confirm", response_model=PaymentConfirmationResponse)

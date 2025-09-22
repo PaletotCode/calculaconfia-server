@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Optional
 from datetime import datetime, timedelta  # ADICIONE ESTA LINHA
+from uuid import uuid4
 
 import mercadopago
 from fastapi import HTTPException, Request, status
@@ -315,6 +316,56 @@ else:
 
 # app/services/payment_service.py
 
+
+def _fetch_preference(preference_id: str) -> dict[str, Any]:
+    if not sdk:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Sistema de pagamento indisponível.",
+        )
+
+    try:
+        response = sdk.preference().get(preference_id)
+    except Exception as exc:  # pragma: no cover - integrações externas
+        logger.error(
+            "Erro ao consultar preferência no Mercado Pago.",
+            preference_id=preference_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Falha ao consultar preferência de pagamento.",
+        ) from exc
+
+    preference = response.get("response") if isinstance(response, dict) else None
+    if not preference:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Preferência de pagamento não encontrada.",
+        )
+
+    return preference
+
+
+def _sum_amount_from_items(items: Optional[list[dict[str, Any]]]) -> float:
+    if not items:
+        return 0.0
+
+    total = 0.0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            unit_price = float(item.get("unit_price", 0))
+            quantity = int(item.get("quantity", 1))
+        except (TypeError, ValueError):
+            continue
+
+        total += unit_price * quantity
+
+    return round(total, 2)
+
+
 def create_payment_preference(user: User, item_details: dict):
     """
     Cria uma preferência de pagamento no Mercado Pago, garantindo dados válidos para o pagador.
@@ -408,6 +459,116 @@ def create_payment_preference(user: User, item_details: dict):
     except Exception as e:
         logger.error(f"Erro na SDK do Mercado Pago ao criar preferência: {e}", exc_info=True)
         raise
+
+
+def create_pix_payment(
+    user: User,
+    preference_id: str,
+    *,
+    idempotency_key: Optional[str] = None,
+) -> dict[str, Any]:
+    if not preference_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="preference_id é obrigatório",
+        )
+
+    if not user.email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Usuário autenticado não possui e-mail válido cadastrado.",
+        )
+
+    preference = _fetch_preference(preference_id)
+
+    external_reference = preference.get("external_reference")
+    if external_reference and str(external_reference) != str(user.id):
+        logger.warning(
+            "Usuário tentou utilizar preferência pertencente a outro usuário.",
+            preference_id=preference_id,
+            preference_owner=external_reference,
+            current_user=user.id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Preferência não pertence ao usuário autenticado.",
+        )
+
+    amount = _sum_amount_from_items(preference.get("items"))
+    if amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Valor da preferência inválido para gerar pagamento PIX.",
+        )
+
+    metadata = preference.get("metadata") or {}
+    credits_amount = metadata.get("credits_amount")
+    if credits_amount is None:
+        credits_amount = _extract_credits_from_items(preference.get("items"))
+
+    public_base_url = _normalize_base_url(settings.PUBLIC_BASE_URL, "PUBLIC_BASE_URL")
+
+    payment_data = {
+        "transaction_amount": amount,
+        "payment_method_id": "pix",
+        "description": (preference.get("items") or [{}])[0].get("title")
+        or "Créditos CalculaConfia",
+        "external_reference": str(user.id),
+        "binary_mode": True,
+        "date_of_expiration": (
+            datetime.utcnow()
+            + timedelta(minutes=settings.MERCADO_PAGO_PIX_EXPIRATION_MINUTES)
+        ).isoformat(timespec="milliseconds")
+        + "Z",
+        "notification_url": f"{public_base_url.rstrip('/')}/api/v1/payments/webhook",
+        "metadata": {
+            "user_id": user.id,
+            "credits_amount": credits_amount or metadata.get("credits_amount") or 3,
+            "preference_id": preference_id,
+        },
+        "payer": {
+            "email": user.email,
+            "first_name": user.first_name or "Usuário",
+            "last_name": user.last_name or "CalculaConfia",
+        },
+    }
+
+    request_options = mercadopago.config.RequestOptions()
+    request_options.custom_headers = {
+        "x-idempotency-key": idempotency_key or str(uuid4()),
+    }
+
+    try:
+        logger.info(
+            "Criando pagamento PIX a partir da preferência.",
+            user_id=user.id,
+            preference_id=preference_id,
+        )
+        payment_response = sdk.payment().create(payment_data, request_options)
+    except Exception as exc:  # pragma: no cover - dependência externa
+        logger.error(
+            "Erro ao criar pagamento PIX no Mercado Pago.",
+            preference_id=preference_id,
+            user_id=user.id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Não foi possível gerar o pagamento PIX.",
+        ) from exc
+
+    payment = payment_response.get("response") if isinstance(payment_response, dict) else None
+    if not payment or "id" not in payment:
+        logger.error(
+            "Resposta inválida ao criar pagamento PIX.",
+            response=payment_response,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Falha ao criar pagamento PIX.",
+        )
+
+    return payment
 
 async def handle_webhook_notification(request: Request, db: AsyncSession):
     """
